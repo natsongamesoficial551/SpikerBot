@@ -13,7 +13,8 @@ const fs = require('fs');
 const path = require('path');
 const Tesseract = require('tesseract.js');
 
-const TOKEN = process.env.DISCORD_TOKEN || 'MTU3NDg5NDE4NzUzNzQ5ODE3Mg.GvKDrI.HkSAycblX9LrmadVs3dOBH6k1Ptv80YuxONOd4';
+const TOKEN = process.env.DISCORD_TOKEN;
+if (!TOKEN) throw new Error('DISCORD_TOKEN não configurado.');
 const GUILD_ID = process.env.GUILD_ID || '1574893765590650880';
 const YT_URL = process.env.YT_URL || 'https://www.youtube.com/@natansitesofc';
 
