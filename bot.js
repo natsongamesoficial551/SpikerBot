@@ -131,15 +131,35 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.User, Partials.Reaction]
 });
 
-// Dummy HTTP server to satisfy Render Free Web Service port check
+// HTTP server + 7-minute self-ping to prevent Render Free Web Service hibernation
 const http = require('http');
 const PORT = process.env.PORT || 10000;
+const SELF_PING_URL = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+const SELF_PING_INTERVAL_MS = 7 * 60 * 1000;
+
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('SpikerBot is running 24/7 on Render!\n');
 });
+
 server.listen(PORT, () => {
   console.log(`[SpikerBot] Health check HTTP server online on port ${PORT}`);
+
+  if (SELF_PING_URL) {
+    const pingSelf = async () => {
+      try {
+        const res = await fetch(`${SELF_PING_URL}/health`);
+        console.log(`[SpikerBot] Auto-ping (${SELF_PING_URL}/health): HTTP ${res.status}`);
+      } catch (err) {
+        console.error(`[SpikerBot] Auto-ping failed: ${err.message}`);
+      }
+    };
+
+    setInterval(pingSelf, SELF_PING_INTERVAL_MS);
+    console.log(`[SpikerBot] Auto-ping ativo a cada 7 minutos para ${SELF_PING_URL}/health`);
+  } else {
+    console.log('[SpikerBot] Auto-ping aguardando RENDER_EXTERNAL_URL ou KEEP_ALIVE_URL.');
+  }
 });
 
 client.once('ready', async () => {
