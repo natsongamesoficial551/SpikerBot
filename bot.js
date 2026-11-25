@@ -55,7 +55,7 @@ function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
-// Validador OCR rigoroso anti-falso-positivo
+// Validador OCR rigoroso anti-falso-positivo (PC + Celular Android/iOS)
 function validateSubscription(rawText) {
   if (!rawText || rawText.trim().length === 0) {
     return { valid: false, reason: 'Nenhum texto detectado na imagem enviada.' };
@@ -68,12 +68,15 @@ function validateSubscription(rawText) {
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[@#_]/g, '');
 
+  const compact = clean.replace(/\s+/g, '');
+
   console.log('[OCR Analisado]:', clean.replace(/\n+/g, ' ').substring(0, 300));
 
-  // 1. Validar identificação do canal (@spikerhakofc / SpikerHak)
+  // 1. Validar identificação do canal (@spikerhakofc / SpikerHak - tolerante a espaçamento/OCR mobile)
   const hasChannel =
-    clean.includes('spikerhakofc') ||
-    clean.includes('spikerhak');
+    compact.includes('spikerhakofc') ||
+    compact.includes('spikerhak') ||
+    /sp[il1]ker\s*h[a4]k/i.test(clean);
 
   if (!hasChannel) {
     return {
@@ -82,14 +85,15 @@ function validateSubscription(rawText) {
     };
   }
 
-  // 2. Se for o próprio criador/proprietário do canal logado
+  // 2. Se for o próprio criador/proprietário do canal logado (PC ou Celular)
   const isOwner =
     clean.includes('seucanal') ||
     clean.includes('seu canal') ||
     clean.includes('seusvideos') ||
     clean.includes('seus videos') ||
     clean.includes('gerenciar videos') ||
-    clean.includes('personalizar canal');
+    clean.includes('personalizar canal') ||
+    clean.includes('editar canal');
 
   if (isOwner) {
     return { valid: true, isOwner: true };
@@ -97,16 +101,19 @@ function validateSubscription(rawText) {
 
   // 3. Validar se o botão está como NÃO inscrito (Inscrever-se / Inscreva-se / Subscribe)
   const hasUnsubscribedButton =
-    clean.includes('inscrever-se') ||
-    clean.includes('inscreva-se') ||
+    /[il1|]nscrev[ea]r?-?se/i.test(clean) ||
     clean.includes('inscrever') ||
     clean.includes('inscreva') ||
     /\bsubscribe\b/i.test(clean);
 
-  // 4. Validar se o botão está como INSCRITO
+  // 4. Validar se o botão está como INSCRITO (PC + Mobile: tolerante a OCR de pill escuro/ícone de sino)
+  // No celular, o botão "Inscrito" pode vir colado com seta/sino ou com I/l/1 trocados
   const hasSubscribedButton =
-    /\b(inscrito|inscrita|subscribed|suscrito)\b/i.test(clean) ||
-    (clean.includes('inscrit') && !hasUnsubscribedButton);
+    /(?:^|[\s\W])[il1|]nscr[il1|]t[oa0](?:$|[\s\Wv▾▼])/i.test(clean) ||
+    /\bsubscr[il1|]bed\b/i.test(clean) ||
+    /\bsuscr[il1|]t[oa0]\b/i.test(clean) ||
+    // Menu de notificações do sino aberto no celular (só aparece se estiver inscrito)
+    (/\b(todas|personalizadas|nenhuma|cancelar inscricao)\b/i.test(clean) && !hasUnsubscribedButton);
 
   if (hasUnsubscribedButton && !hasSubscribedButton) {
     return {
