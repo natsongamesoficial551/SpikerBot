@@ -439,6 +439,72 @@ client.once('ready', async () => {
 
   // Iniciar monitor automático de novos vídeos do YouTube (@spikerhakofc)
   startYouTubeNotifier();
+
+  // Limpar ❌ de prints cujos autores já foram aprovados manualmente pela Staff
+  syncApprovedPrints();
+});
+
+async function syncApprovedPrints() {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const channel = await client.channels.fetch(LIBERAR_CHANNEL_ID).catch(() => null);
+    if (!channel || !channel.isTextBased()) return;
+
+    const messages = await channel.messages.fetch({ limit: 15 });
+    for (const msg of messages.values()) {
+      if (msg.author.bot) continue;
+      const xReaction = msg.reactions.cache.get('❌');
+      if (!xReaction) continue;
+
+      const member = await guild.members.fetch(msg.author.id).catch(() => null);
+      if (member && verificadoRoleId && member.roles.cache.has(verificadoRoleId)) {
+        await xReaction.users.remove(client.user.id).catch(() => {});
+        await msg.react('✅').catch(() => {});
+        console.log(`[SpikerBot] ❌ removido e ✅ aplicado para membro já aprovado: ${msg.author.tag}`);
+      }
+    }
+  } catch (err) {
+    console.error('[SpikerBot] Erro ao sincronizar prints aprovadas:', err.message);
+  }
+}
+
+// Se um Staff reagir com ✅ manualmente em uma print, o bot remove o ❌ automaticamente
+client.on('messageReactionAdd', async (reaction, user) => {
+  try {
+    if (user.bot) return;
+    if (reaction.partial) await reaction.fetch();
+    if (reaction.message.partial) await reaction.message.fetch();
+
+    const msg = reaction.message;
+    if (msg.channel.id !== LIBERAR_CHANNEL_ID) return;
+    if (reaction.emoji.name !== '✅') return;
+
+    const guild = msg.guild;
+    if (!guild) return;
+
+    const staffMember = await guild.members.fetch(user.id).catch(() => null);
+    const isStaff = staffMember && (
+      staffMember.permissions.has(PermissionsBitField.Flags.Administrator) ||
+      staffMember.permissions.has(PermissionsBitField.Flags.ManageGuild) ||
+      staffRoleIds.some(rId => staffMember.roles.cache.has(rId))
+    );
+    if (!isStaff) return;
+
+    const xReaction = msg.reactions.cache.get('❌');
+    if (xReaction) {
+      await xReaction.users.remove(client.user.id).catch(() => {});
+    }
+
+    const targetMember = await guild.members.fetch(msg.author.id).catch(() => null);
+    if (targetMember && verificadoRoleId && !targetMember.roles.cache.has(verificadoRoleId)) {
+      await targetMember.roles.add(verificadoRoleId).catch(() => {});
+      if (roles['🎬・Notificações YouTube']) await targetMember.roles.add(roles['🎬・Notificações YouTube']).catch(() => {});
+      if (roles['👤・Membro']) await targetMember.roles.add(roles['👤・Membro']).catch(() => {});
+    }
+    console.log(`[SpikerBot] Aprovação manual por ${user.tag}: ❌ removido na print de ${msg.author.tag}`);
+  } catch (err) {
+    console.error('[SpikerBot] Erro ao processar aprovação manual por reação:', err.message);
+  }
 });
 
 // MONITOR AUTOMÁTICO DE NOVOS VÍDEOS DO YOUTUBE
