@@ -22,6 +22,7 @@ const TICKET_PANEL_CHANNEL_ID = '1574896947381272688'; // 🎫・abrir-ticket
 const SUPPORT_CATEGORY_ID = '1574896939227680858';     // ╭・🎧「 𝖲𝖴𝖯𝖮𝖱𝖳𝖤 」
 const ADMIN_LOGS_CHANNEL_ID = '1574896994135183400';   // 🛡️・logs-de-moderação
 const LIBERAR_CHANNEL_ID = '1574909372595708017';      // 🔓・liberar-servidor
+const WELCOME_CHANNEL_ID = '1574896851688357928';      // 👋・boas-vindas
 
 const roles = JSON.parse(fs.readFileSync(path.join(__dirname, 'roles.json'), 'utf8'));
 const verificadoRoleId = roles['✅・Verificado'];
@@ -123,6 +124,7 @@ function validateSubscription(rawText) {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
@@ -208,6 +210,39 @@ client.once('ready', async () => {
     }
   } catch (err) {
     console.error('[SpikerBot] Erro ao checar painel de tickets:', err);
+  }
+});
+
+// EVENTO: BOAS-VINDAS COM BANNER DO SERVIDOR E AVATAR DO MEMBRO
+client.on('guildMemberAdd', async (member) => {
+  try {
+    const channel = await client.channels.fetch(WELCOME_CHANNEL_ID);
+    if (!channel || !channel.isTextBased()) return;
+
+    const bannerPath = path.join(__dirname, 'banner.png');
+    const files = fs.existsSync(bannerPath)
+      ? [{ attachment: bannerPath, name: 'banner.png' }]
+      : [];
+
+    const welcomeEmbed = new EmbedBuilder()
+      .setTitle('👋 ┃ BEM-VINDO AO SPIKERHAK!')
+      .setDescription(
+        `Fala ${member}! Seja bem-vindo ao **SpikerHak**.\n` +
+        `Envie o print da sua inscrição em <#${LIBERAR_CHANNEL_ID}> para liberar o servidor completo!`
+      )
+      .setColor(0x00FFCC)
+      .setThumbnail(member.user.displayAvatarURL({ extension: 'png', size: 256 }))
+      .setFooter({ text: `SpikerHak • Membro #${member.guild.memberCount}` })
+      .setTimestamp();
+
+    if (files.length > 0) {
+      welcomeEmbed.setImage('attachment://banner.png');
+    }
+
+    await channel.send({ content: `${member}`, embeds: [welcomeEmbed], files });
+    console.log(`[SpikerBot] Boas-vindas enviado para ${member.user.tag}`);
+  } catch (err) {
+    console.error('[SpikerBot] Erro ao enviar boas-vindas:', err);
   }
 });
 
