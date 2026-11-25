@@ -11,7 +11,14 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Tesseract = require('tesseract.js');
+let sharp = null;
+try {
+  sharp = require('sharp');
+} catch (_) {
+  console.warn('[SpikerBot] sharp não instalado — rodando OCR sem pré-processamento.');
+}
 
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) throw new Error('DISCORD_TOKEN não configurado.');
@@ -138,25 +145,76 @@ function validateSubscription(rawText) {
   return { valid: true };
 }
 
-// Executa OCR em até 2 passadas: padrão (tela inteira) e sparse text PSM 11 (prints com zoom/recorte)
-async function recognizeWithZoomSupport(imageUrl) {
-  const pass1 = await Tesseract.recognize(imageUrl, 'por+eng', {
+// Banco de hashes de prints já aprovadas (impede reutilizar print de outra pessoa)
+const HASHES_FILE = path.join(__dirname, 'verified_hashes.json');
+function loadHashes() {
+  if (!fs.existsSync(HASHES_FILE)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(HASHES_FILE, 'utf8'));
+  } catch (_) {
+    return {};
+  }
+}
+function saveHashes(hashes) {
+  fs.writeFileSync(HASHES_FILE, JSON.stringify(hashes, null, 2), 'utf8');
+}
+
+// Executa OCR com pré-processamento (Modo Escuro + Zoom/Recorte) + proteção anti-duplicata
+async function recognizeWithZoomSupport(imageUrl, userId) {
+  const res = await fetch(imageUrl);
+  if (!res.ok) throw new Error(`Falha ao baixar imagem: HTTP ${res.status}`);
+  const imgBuffer = Buffer.from(await res.arrayBuffer());
+
+  // 1. Checagem anti-fraude: impedir que outro usuário reutilize a mesma print
+  const imgHash = crypto.createHash('sha256').update(imgBuffer).digest('hex');
+  const hashes = loadHashes();
+  if (hashes[imgHash] && hashes[imgHash] !== userId) {
+    return {
+      text: '',
+      imgHash,
+      validation: {
+        valid: false,
+        reason: 'Essa print já foi usada por outro membro! Tire uma print nova da sua própria tela.'
+      }
+    };
+  }
+
+  // 2. Passada 1: imagem original (ideal para Modo Claro)
+  const pass1 = await Tesseract.recognize(imgBuffer, 'por+eng', {
     logger: () => {}
   });
   const text1 = pass1.data.text || '';
   const check1 = validateSubscription(text1);
   if (check1.valid) {
-    return { text: text1, validation: check1 };
+    return { text: text1, imgHash, validation: check1 };
   }
 
-  // Segunda passada com PSM 11 (Sparse Text) para capturar texto grande/isolado em prints com zoom
+  // 3. Passada 2: pré-processamento para Modo Escuro + Zoom (grayscale + negate + normalize + sharpen + upscale) com PSM 11
+  let processedBuffer = imgBuffer;
+  if (sharp) {
+    try {
+      const meta = await sharp(imgBuffer).metadata();
+      const targetWidth = meta.width ? Math.min(meta.width * 2, 2400) : 1600;
+      processedBuffer = await sharp(imgBuffer)
+        .grayscale()
+        .negate({ alpha: false })
+        .normalize()
+        .sharpen()
+        .resize({ width: targetWidth, withoutEnlargement: false })
+        .png()
+        .toBuffer();
+    } catch (err) {
+      console.warn('[SpikerBot OCR] Fallback sem sharp:', err.message);
+    }
+  }
+
   const worker = await Tesseract.createWorker('por+eng');
   try {
     await worker.setParameters({ tessedit_pageseg_mode: '11' });
-    const pass2 = await worker.recognize(imageUrl);
+    const pass2 = await worker.recognize(processedBuffer);
     const text2 = pass2.data.text || '';
     const combinedText = `${text1}\n${text2}`;
-    return { text: combinedText, validation: validateSubscription(combinedText) };
+    return { text: combinedText, imgHash, validation: validateSubscription(combinedText) };
   } finally {
     await worker.terminate();
   }
@@ -718,8 +776,8 @@ client.on('messageCreate', async (message) => {
   console.log(`[SpikerBot OCR] Processando print enviada por ${message.author.tag} (${imageAttachment.url})...`);
 
   try {
-    // Executar OCR com suporte a prints com zoom/recorte (2 passadas: padrão + PSM 11)
-    const { validation } = await recognizeWithZoomSupport(imageAttachment.url);
+    // Executar OCR com pré-processamento (Modo Escuro + Zoom) e anti-duplicata
+    const { imgHash, validation } = await recognizeWithZoomSupport(imageAttachment.url, message.author.id);
 
     // Remover reação de ampulheta
     try {
@@ -728,7 +786,12 @@ client.on('messageCreate', async (message) => {
     } catch (_) {}
 
     if (validation.valid) {
-      // ✅ APROVADO!
+      // ✅ APROVADO! Salvar hash da print para evitar reutilização por terceiros
+      if (imgHash) {
+        const hashes = loadHashes();
+        hashes[imgHash] = message.author.id;
+        saveHashes(hashes);
+      }
       await message.react('✅');
 
       // Atribuir cargos
