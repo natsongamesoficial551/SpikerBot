@@ -58,7 +58,7 @@ function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
-// Validador OCR rigoroso anti-falso-positivo (PC + Celular Android/iOS)
+// Validador OCR rigoroso anti-falso-positivo (PC + Celular + Prints com Zoom/Recorte)
 function validateSubscription(rawText) {
   if (!rawText || rawText.trim().length === 0) {
     return { valid: false, reason: 'Nenhum texto detectado na imagem enviada.' };
@@ -75,11 +75,11 @@ function validateSubscription(rawText) {
 
   console.log('[OCR Analisado]:', clean.replace(/\n+/g, ' ').substring(0, 300));
 
-  // 1. Validar identificação do canal (@spikerhakofc / SpikerHak - tolerante a espaçamento/OCR mobile)
+  // 1. Validar identificação do canal (@spikerhakofc / SpikerHak - tolerante a zoom e OCR mobile)
   const hasChannel =
     compact.includes('spikerhakofc') ||
     compact.includes('spikerhak') ||
-    /sp[il1]ker\s*h[a4]k/i.test(clean);
+    /sp[il1]k[e3]r\s*h[a4]k/i.test(clean);
 
   if (!hasChannel) {
     return {
@@ -109,14 +109,17 @@ function validateSubscription(rawText) {
     clean.includes('inscreva') ||
     /\bsubscribe\b/i.test(clean);
 
-  // 4. Validar se o botão está como INSCRITO (PC + Mobile: tolerante a OCR de pill escuro/ícone de sino)
-  // No celular, o botão "Inscrito" pode vir colado com seta/sino ou com I/l/1 trocados
+  // 4. Validar se o botão está como INSCRITO (PC + Mobile + Zoom/Recorte)
+  // Ignora explicitamente "inscritos" (plural, contador do canal) para evitar falso positivo.
+  // Tolera ícones de sino/seta colados ao botão "Inscrito" em prints com zoom ou tema escuro.
+  const withoutSubscriberCount = clean.replace(/\b\d[\d.,\skm]*\s*[il1|]nscr[il1|]t[oa0]s\b/gi, '');
+
   const hasSubscribedButton =
-    /(?:^|[\s\W])[il1|]nscr[il1|]t[oa0](?:$|[\s\Wv▾▼])/i.test(clean) ||
-    /\bsubscr[il1|]bed\b/i.test(clean) ||
-    /\bsuscr[il1|]t[oa0]\b/i.test(clean) ||
-    // Menu de notificações do sino aberto no celular (só aparece se estiver inscrito)
-    (/\b(todas|personalizadas|nenhuma|cancelar inscricao)\b/i.test(clean) && !hasUnsubscribedButton);
+    /(?:^|[\s\W\d])[il1|]nscr[il1|]t[oa0](?:$|[\s\Wv▾▼>\]\)])/i.test(withoutSubscriberCount) ||
+    /(?:^|[\s\W])subscr[il1|]bed(?:$|[\s\Wv▾▼>\]\)])/i.test(withoutSubscriberCount) ||
+    /(?:^|[\s\W])suscr[il1|]t[oa0](?:$|[\s\Wv▾▼>\]\)])/i.test(withoutSubscriberCount) ||
+    // Menu de notificações do sino aberto (só existe quando já está inscrito)
+    (/\b(todas|personalizadas|nenhuma|cancelar inscricao)\b/i.test(withoutSubscriberCount) && !hasUnsubscribedButton);
 
   if (hasUnsubscribedButton && !hasSubscribedButton) {
     return {
@@ -133,6 +136,30 @@ function validateSubscription(rawText) {
   }
 
   return { valid: true };
+}
+
+// Executa OCR em até 2 passadas: padrão (tela inteira) e sparse text PSM 11 (prints com zoom/recorte)
+async function recognizeWithZoomSupport(imageUrl) {
+  const pass1 = await Tesseract.recognize(imageUrl, 'por+eng', {
+    logger: () => {}
+  });
+  const text1 = pass1.data.text || '';
+  const check1 = validateSubscription(text1);
+  if (check1.valid) {
+    return { text: text1, validation: check1 };
+  }
+
+  // Segunda passada com PSM 11 (Sparse Text) para capturar texto grande/isolado em prints com zoom
+  const worker = await Tesseract.createWorker('por+eng');
+  try {
+    await worker.setParameters({ tessedit_pageseg_mode: '11' });
+    const pass2 = await worker.recognize(imageUrl);
+    const text2 = pass2.data.text || '';
+    const combinedText = `${text1}\n${text2}`;
+    return { text: combinedText, validation: validateSubscription(combinedText) };
+  } finally {
+    await worker.terminate();
+  }
 }
 
 const client = new Client({
@@ -625,13 +652,8 @@ client.on('messageCreate', async (message) => {
   console.log(`[SpikerBot OCR] Processando print enviada por ${message.author.tag} (${imageAttachment.url})...`);
 
   try {
-    // Executar OCR com Tesseract
-    const ocrResult = await Tesseract.recognize(imageAttachment.url, 'por+eng', {
-      logger: m => {}
-    });
-
-    const text = ocrResult.data.text || '';
-    const validation = validateSubscription(text);
+    // Executar OCR com suporte a prints com zoom/recorte (2 passadas: padrão + PSM 11)
+    const { validation } = await recognizeWithZoomSupport(imageAttachment.url);
 
     // Remover reação de ampulheta
     try {
