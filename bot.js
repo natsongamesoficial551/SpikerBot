@@ -20,6 +20,7 @@ const YT_URL = process.env.YT_URL || 'https://www.youtube.com/@spikerhakofc';
 
 const TICKET_PANEL_CHANNEL_ID = '1574896947381272688'; // 🎫・abrir-ticket
 const SUPPORT_CATEGORY_ID = '1574896939227680858';     // ╭・🎧「 𝖲𝖴𝖯𝖮𝖱𝖳𝖤 」
+const COMUNIDADE_CATEGORY_ID = '1574896855395999940';  // ╭・💬「 𝗖𝗢𝗠𝗨𝗡𝗜𝗗𝗔𝗗𝗘 」
 const ADMIN_LOGS_CHANNEL_ID = '1574896994135183400';   // 🛡️・logs-de-moderação
 const LIBERAR_CHANNEL_ID = '1574909372595708017';      // 🔓・liberar-servidor
 const WELCOME_CHANNEL_ID = '1574896851688357928';      // 👋・boas-vindas
@@ -280,6 +281,131 @@ client.once('ready', async () => {
     }
   } catch (err) {
     console.error('[SpikerBot] Erro ao aplicar permissões nos fóruns:', err);
+  }
+
+  // Garantir cargo de Doador e canais de Doações + Boosts na categoria Comunidade
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const guildRoles = await guild.roles.fetch();
+    let doadorRole = guildRoles.find(r => r.name === '💸・Doador');
+    if (!doadorRole) {
+      doadorRole = await guild.roles.create({
+        name: '💸・Doador',
+        color: 0x2ECC71,
+        hoist: true,
+        mentionable: false,
+        reason: 'Cargo oficial de doadores do servidor SpikerHak'
+      });
+      console.log(`[SpikerBot] Cargo criado: ${doadorRole.name} (${doadorRole.id})`);
+    }
+
+    const readOnlyOverwrites = [
+      {
+        id: guild.id,
+        deny: [PermissionsBitField.Flags.ViewChannel]
+      }
+    ];
+    if (verificadoRoleId) {
+      readOnlyOverwrites.push({
+        id: verificadoRoleId,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AddReactions
+        ],
+        deny: [
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.SendMessagesInThreads,
+          PermissionsBitField.Flags.CreatePublicThreads,
+          PermissionsBitField.Flags.CreatePrivateThreads
+        ]
+      });
+    }
+    for (const rId of staffRoleIds) {
+      readOnlyOverwrites.push({
+        id: rId,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AddReactions,
+          PermissionsBitField.Flags.AttachFiles
+        ]
+      });
+    }
+
+    const guildChannels = await guild.channels.fetch();
+    const bannerPath = path.join(__dirname, 'banner.png');
+    const logoPath = path.join(__dirname, 'logo.png');
+
+    // Canal 💸・doações
+    let doacoesCh = guildChannels.find(c => c && c.name === '💸・doações');
+    if (!doacoesCh) {
+      doacoesCh = await guild.channels.create({
+        name: '💸・doações',
+        type: ChannelType.GuildText,
+        parent: COMUNIDADE_CATEGORY_ID,
+        topic: 'Apoie a comunidade SpikerHak via Pix e receba o cargo exclusivo 💸・Doador!',
+        permissionOverwrites: readOnlyOverwrites
+      });
+      const files = [];
+      if (fs.existsSync(bannerPath)) files.push({ attachment: bannerPath, name: 'banner.png' });
+      if (fs.existsSync(logoPath)) files.push({ attachment: logoPath, name: 'logo.png' });
+
+      const doacaoEmbed = new EmbedBuilder()
+        .setTitle('💸 ┃ APOIE O SPIKERHAK — DOAÇÕES VIA PIX')
+        .setDescription(
+          `Curte os provedores gratuitos, ferramentas open-source e projetos da comunidade?\n\n` +
+          `### 💖 Por que apoiar?\n` +
+          `• Ajuda a manter o servidor, bots e novos projetos sempre ativos.\n` +
+          `• Você recebe o cargo exclusivo **<@&${doadorRole.id}>** em destaque na lista de membros.\n\n` +
+          `> ⏳ **Em breve:** o bot de doação automática via Pix será ativado diretamente aqui neste canal!`
+        )
+        .setColor(0x2ECC71)
+        .setFooter({ text: 'SpikerHak • Obrigado por fortalecer a comunidade!' });
+
+      if (fs.existsSync(bannerPath)) doacaoEmbed.setImage('attachment://banner.png');
+      if (fs.existsSync(logoPath)) doacaoEmbed.setThumbnail('attachment://logo.png');
+
+      await doacoesCh.send({ embeds: [doacaoEmbed], files });
+      console.log(`[SpikerBot] Canal criado: ${doacoesCh.name} (${doacoesCh.id})`);
+    }
+
+    // Canal 💎・boosts
+    let boostsCh = guildChannels.find(c => c && c.name === '💎・boosts');
+    if (!boostsCh) {
+      boostsCh = await guild.channels.create({
+        name: '💎・boosts',
+        type: ChannelType.GuildText,
+        parent: COMUNIDADE_CATEGORY_ID,
+        topic: 'Impulsione o servidor SpikerHak e desbloqueie benefícios exclusivos de Server Booster!',
+        permissionOverwrites: readOnlyOverwrites
+      });
+      const files = [];
+      if (fs.existsSync(bannerPath)) files.push({ attachment: bannerPath, name: 'banner.png' });
+      if (fs.existsSync(logoPath)) files.push({ attachment: logoPath, name: 'logo.png' });
+
+      const boosterRoleId = roles['💎・Server Booster'];
+      const boostEmbed = new EmbedBuilder()
+        .setTitle('💎 ┃ IMPULSOS DO SERVIDOR — SERVER BOOST')
+        .setDescription(
+          `Impulsionar o **SpikerHak** ajuda o servidor a liberar mais qualidade de áudio, emojis personalizados, banner animado e muito mais!\n\n` +
+          `### ✨ Benefícios de quem dá Boost:\n` +
+          `• Cargo exclusivo em destaque: ${boosterRoleId ? `<@&${boosterRoleId}>` : '**💎・Server Booster**'}\n` +
+          `• Reconhecimento oficial da comunidade e da Staff.\n` +
+          `• Ajuda direta no crescimento do servidor SpikerHak.`
+        )
+        .setColor(0xF47FFF)
+        .setFooter({ text: 'SpikerHak • Impulsos & Benefícios' });
+
+      if (fs.existsSync(bannerPath)) boostEmbed.setImage('attachment://banner.png');
+      if (fs.existsSync(logoPath)) boostEmbed.setThumbnail('attachment://logo.png');
+
+      await boostsCh.send({ embeds: [boostEmbed], files });
+      console.log(`[SpikerBot] Canal criado: ${boostsCh.name} (${boostsCh.id})`);
+    }
+  } catch (err) {
+    console.error('[SpikerBot] Erro ao criar cargo/canais de Doações e Boosts:', err);
   }
 });
 
