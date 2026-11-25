@@ -422,15 +422,28 @@ async function resolveYouTubeChannelId() {
   if (cachedYtChannelId) return cachedYtChannelId;
   try {
     const res = await fetch(YT_URL, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+      }
     });
     const html = await res.text();
-    const match = html.match(/"channelId":"(UC[A-Za-z0-9_-]{22})"/);
-    if (match) {
-      cachedYtChannelId = match[1];
-      console.log(`[SpikerBot YT] Channel ID resolvido: ${cachedYtChannelId}`);
-      return cachedYtChannelId;
+    const patterns = [
+      /feeds\/videos\.xml\?channel_id=(UC[A-Za-z0-9_-]{22})/,
+      /youtube\.com\/channel\/(UC[A-Za-z0-9_-]{22})/,
+      /"externalId":"(UC[A-Za-z0-9_-]{22})"/,
+      /"browseId":"(UC[A-Za-z0-9_-]{22})"/,
+      /"channelId":"(UC[A-Za-z0-9_-]{22})"/
+    ];
+    for (const re of patterns) {
+      const match = html.match(re);
+      if (match) {
+        cachedYtChannelId = match[1];
+        console.log(`[SpikerBot YT] Channel ID resolvido: ${cachedYtChannelId}`);
+        return cachedYtChannelId;
+      }
     }
+    console.warn('[SpikerBot YT] Não foi possível extrair o channelId automaticamente. Defina YT_CHANNEL_ID no Render se persistir.');
   } catch (err) {
     console.error('[SpikerBot YT] Erro ao resolver channelId:', err.message);
   }
