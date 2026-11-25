@@ -23,6 +23,13 @@ const SUPPORT_CATEGORY_ID = '1574896939227680858';     // ╭・🎧「 𝖲𝖴
 const ADMIN_LOGS_CHANNEL_ID = '1574896994135183400';   // 🛡️・logs-de-moderação
 const LIBERAR_CHANNEL_ID = '1574909372595708017';      // 🔓・liberar-servidor
 const WELCOME_CHANNEL_ID = '1574896851688357928';      // 👋・boas-vindas
+const READ_ONLY_FORUM_IDS = [
+  '1574901749632860261', // 🎁・provedores-gratuitos
+  '1574901757711093760', // 🌾・farms
+  '1574901997784530974', // 🔓・jailbreak
+  '1574901297268916264', // 🚀・projetos
+  '1574896918608224306'  // 🛠️・tutoriais-e-guias
+];
 
 const roles = JSON.parse(fs.readFileSync(path.join(__dirname, 'roles.json'), 'utf8'));
 const verificadoRoleId = roles['✅・Verificado'];
@@ -210,6 +217,65 @@ client.once('ready', async () => {
     }
   } catch (err) {
     console.error('[SpikerBot] Erro ao checar painel de tickets:', err);
+  }
+
+  // Travar fóruns oficiais para somente leitura/reação (apenas Staff posta e comenta)
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const overwrites = [
+      {
+        id: guild.id,
+        deny: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.SendMessagesInThreads,
+          PermissionsBitField.Flags.CreatePublicThreads,
+          PermissionsBitField.Flags.CreatePrivateThreads
+        ]
+      }
+    ];
+
+    if (verificadoRoleId) {
+      overwrites.push({
+        id: verificadoRoleId,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AddReactions
+        ],
+        deny: [
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.SendMessagesInThreads,
+          PermissionsBitField.Flags.CreatePublicThreads,
+          PermissionsBitField.Flags.CreatePrivateThreads
+        ]
+      });
+    }
+
+    for (const rId of staffRoleIds) {
+      overwrites.push({
+        id: rId,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.SendMessagesInThreads,
+          PermissionsBitField.Flags.CreatePublicThreads,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AddReactions,
+          PermissionsBitField.Flags.AttachFiles
+        ]
+      });
+    }
+
+    for (const forumId of READ_ONLY_FORUM_IDS) {
+      const forum = await guild.channels.fetch(forumId).catch(() => null);
+      if (forum) {
+        await forum.permissionOverwrites.set(overwrites);
+        console.log(`[SpikerBot] Fórum bloqueado para somente leitura/reação: ${forum.name}`);
+      }
+    }
+  } catch (err) {
+    console.error('[SpikerBot] Erro ao aplicar permissões nos fóruns:', err);
   }
 });
 
