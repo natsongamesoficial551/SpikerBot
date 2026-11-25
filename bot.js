@@ -24,6 +24,8 @@ const COMUNIDADE_CATEGORY_ID = '1574896855395999940';  // ╭・💬「 𝗖𝗢
 const ADMIN_LOGS_CHANNEL_ID = '1574896994135183400';   // 🛡️・logs-de-moderação
 const LIBERAR_CHANNEL_ID = '1574909372595708017';      // 🔓・liberar-servidor
 const WELCOME_CHANNEL_ID = '1574896851688357928';      // 👋・boas-vindas
+const YOUTUBE_CHANNEL_ID_DISCORD = '1574896839331815554'; // 🔴・youtube-spikerhak
+const YT_CHECK_INTERVAL_MS = 5 * 60 * 1000;            // 5 minutos
 const READ_ONLY_FORUM_IDS = [
   '1574901749632860261', // 🎁・provedores-gratuitos
   '1574901757711093760', // 🌾・farms
@@ -407,7 +409,141 @@ client.once('ready', async () => {
   } catch (err) {
     console.error('[SpikerBot] Erro ao criar cargo/canais de Doações e Boosts:', err);
   }
+
+  // Iniciar monitor automático de novos vídeos do YouTube (@spikerhakofc)
+  startYouTubeNotifier();
 });
+
+// MONITOR AUTOMÁTICO DE NOVOS VÍDEOS DO YOUTUBE
+let cachedYtChannelId = process.env.YT_CHANNEL_ID || null;
+let lastNotifiedVideoId = null;
+
+async function resolveYouTubeChannelId() {
+  if (cachedYtChannelId) return cachedYtChannelId;
+  try {
+    const res = await fetch(YT_URL, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    const html = await res.text();
+    const match = html.match(/"channelId":"(UC[A-Za-z0-9_-]{22})"/);
+    if (match) {
+      cachedYtChannelId = match[1];
+      console.log(`[SpikerBot YT] Channel ID resolvido: ${cachedYtChannelId}`);
+      return cachedYtChannelId;
+    }
+  } catch (err) {
+    console.error('[SpikerBot YT] Erro ao resolver channelId:', err.message);
+  }
+  return null;
+}
+
+function decodeXmlEntities(str) {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+async function checkLatestYouTubeVideo(isInitialRun = false) {
+  try {
+    const ytChannelId = await resolveYouTubeChannelId();
+    if (!ytChannelId) return;
+
+    const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${ytChannelId}`;
+    const res = await fetch(rssUrl);
+    if (!res.ok) return;
+
+    const xml = await res.text();
+    const entryMatch = xml.match(/<entry>([\s\S]*?)<\/entry>/);
+    if (!entryMatch) return;
+
+    const entry = entryMatch[1];
+    const videoId = entry.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1];
+    const titleRaw = entry.match(/<title>([^<]+)<\/title>/)?.[1];
+    const published = entry.match(/<published>([^<]+)<\/published>/)?.[1];
+    if (!videoId || !titleRaw) return;
+
+    const title = decodeXmlEntities(titleRaw);
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+    // Na inicialização, apenas registra o último vídeo atual sem reenviar vídeos antigos
+    if (isInitialRun && !lastNotifiedVideoId) {
+      lastNotifiedVideoId = videoId;
+      console.log(`[SpikerBot YT] Monitor iniciado. Último vídeo registrado: ${videoId}`);
+      return;
+    }
+
+    if (videoId === lastNotifiedVideoId) return;
+
+    const discordChannel = await client.channels.fetch(YOUTUBE_CHANNEL_ID_DISCORD).catch(() => null);
+    if (!discordChannel || !discordChannel.isTextBased()) return;
+
+    // Evita duplicar vídeo após reinício no Render checando histórico recente do canal
+    const recentMsgs = await discordChannel.messages.fetch({ limit: 15 });
+    const alreadyPosted = recentMsgs.some(m =>
+      m.content.includes(videoId) ||
+      m.embeds.some(e => (e.url && e.url.includes(videoId)) || (e.description && e.description.includes(videoId)))
+    );
+
+    lastNotifiedVideoId = videoId;
+    if (alreadyPosted) return;
+
+    const logoPath = path.join(__dirname, 'logo.png');
+    const files = fs.existsSync(logoPath)
+      ? [{ attachment: logoPath, name: 'logo.png' }]
+      : [];
+
+    const ytRoleId = roles['🎬・Notificações YouTube'];
+    const videoEmbed = new EmbedBuilder()
+      .setAuthor({
+        name: 'SpikerHak • Novo Vídeo no YouTube!',
+        url: YT_URL,
+        iconURL: files.length > 0 ? 'attachment://logo.png' : undefined
+      })
+      .setTitle(`🎬 ┃ ${title}`)
+      .setURL(videoUrl)
+      .setDescription(
+        `Acabou de sair vídeo novo no canal **[@spikerhakofc](${YT_URL})**!\n\n` +
+        `👉 **[Clique aqui para assistir agora](${videoUrl})**\n` +
+        `Deixe o like e comente o que achou!`
+      )
+      .setColor(0xFF0000)
+      .setImage(`https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`)
+      .setFooter({ text: 'YouTube Oficial • SpikerHak' })
+      .setTimestamp(published ? new Date(published) : new Date());
+
+    if (files.length > 0) {
+      videoEmbed.setThumbnail('attachment://logo.png');
+    }
+
+    const watchRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('Assistir no YouTube')
+        .setEmoji('▶️')
+        .setStyle(ButtonStyle.Link)
+        .setURL(videoUrl)
+    );
+
+    await discordChannel.send({
+      content: `${ytRoleId ? `<@&${ytRoleId}> ` : ''}🚨 **VÍDEO NOVO NO CANAL!**`,
+      embeds: [videoEmbed],
+      components: [watchRow],
+      files
+    });
+
+    console.log(`[SpikerBot YT] Novo vídeo anunciado: ${title} (${videoUrl})`);
+  } catch (err) {
+    console.error('[SpikerBot YT] Erro ao checar vídeos:', err.message);
+  }
+}
+
+function startYouTubeNotifier() {
+  checkLatestYouTubeVideo(true);
+  setInterval(() => checkLatestYouTubeVideo(false), YT_CHECK_INTERVAL_MS);
+  console.log('[SpikerBot YT] Monitor de novos vídeos ativo (checagem a cada 5 minutos).');
+}
 
 // EVENTO: BOAS-VINDAS COM BANNER DO SERVIDOR E AVATAR DO MEMBRO
 client.on('guildMemberAdd', async (member) => {
