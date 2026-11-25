@@ -16,7 +16,7 @@ const Tesseract = require('tesseract.js');
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) throw new Error('DISCORD_TOKEN não configurado.');
 const GUILD_ID = process.env.GUILD_ID || '1574893765590650880';
-const YT_URL = process.env.YT_URL || 'https://www.youtube.com/@natansitesofc';
+const YT_URL = process.env.YT_URL || 'https://www.youtube.com/@spikerhakofc';
 
 const TICKET_PANEL_CHANNEL_ID = '1574896947381272688'; // 🎫・abrir-ticket
 const SUPPORT_CATEGORY_ID = '1574896939227680858';     // ╭・🎧「 𝖲𝖴𝖯𝖮𝖱𝖳𝖤 」
@@ -70,18 +70,15 @@ function validateSubscription(rawText) {
 
   console.log('[OCR Analisado]:', clean.replace(/\n+/g, ' ').substring(0, 300));
 
-  // 1. Validar identificação do canal (@natansitesofc / Natan Sites / SpikerHak)
+  // 1. Validar identificação do canal (@spikerhakofc / SpikerHak)
   const hasChannel =
-    clean.includes('natansitesofc') ||
-    clean.includes('natansites') ||
-    (clean.includes('natan') && clean.includes('sites')) ||
-    (clean.includes('spikerhak') && clean.includes('417 inscritos')) ||
-    (clean.includes('spikerhak') && clean.includes('natansites'));
+    clean.includes('spikerhakofc') ||
+    clean.includes('spikerhak');
 
   if (!hasChannel) {
     return {
       valid: false,
-      reason: 'O canal @natansitesofc não foi identificado na print. Certifique-se de mostrar o nome ou o @ do canal.'
+      reason: 'O canal @spikerhakofc não foi identificado na print. Certifique-se de mostrar o nome ou o @ do canal.'
     };
   }
 
@@ -333,7 +330,7 @@ client.on('messageCreate', async (message) => {
   );
 
   if (!imageAttachment) {
-    const errorMsg = await message.reply('⚠️ Por favor, envie uma **imagem/print** comprovando sua inscrição no canal [youtube.com/@natansitesofc](https://www.youtube.com/@natansitesofc)!');
+    const errorMsg = await message.reply('⚠️ Por favor, envie uma **imagem/print** comprovando sua inscrição no canal [youtube.com/@spikerhakofc](https://www.youtube.com/@spikerhakofc)!');
     setTimeout(() => errorMsg.delete().catch(() => {}), 10000);
     return;
   }
@@ -372,7 +369,7 @@ client.on('messageCreate', async (message) => {
       const successEmbed = new EmbedBuilder()
         .setTitle('✅ ┃ INSCRIÇÃO CONFIRMADA — SERVIDOR LIBERADO!')
         .setDescription(
-          `Parabéns ${message.author}! Sua inscrição no canal **[@natansitesofc](${YT_URL})** foi verificada com sucesso por nossa IA!\n\n` +
+          `Parabéns ${message.author}! Sua inscrição no canal **[@spikerhakofc](${YT_URL})** foi verificada com sucesso por nossa IA!\n\n` +
           `• 🔓 **Cargo Atribuído:** <@&${verificadoRoleId}>\n` +
           `• 🚀 Todos os canais de **Provedores, Farms, Jailbreaks, Projetos e Suporte** foram liberados para você!\n\n` +
           `*Seja muito bem-vindo ao SpikerHak e aproveite os conteúdos!*`
@@ -395,7 +392,7 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                   { name: '👤 Membro', value: `${message.author} (\`${message.author.tag}\`)`, inline: true },
                   { name: '🆔 ID', value: `\`${message.author.id}\``, inline: true },
-                  { name: '📺 Canal', value: '`@natansitesofc`', inline: true }
+                  { name: '📺 Canal', value: '`@spikerhakofc`', inline: true }
                 )
                 .setThumbnail(message.author.displayAvatarURL())
                 .setTimestamp()
@@ -413,9 +410,9 @@ client.on('messageCreate', async (message) => {
           `Olá ${message.author}, nossa IA analisou sua print mas **não encontrou a comprovação de inscrição**.\n\n` +
           `**Motivo:** ${validation.reason}\n\n` +
           `### 📌 Como resolver:\n` +
-          `1. Acesse: [youtube.com/@natansitesofc](${YT_URL})\n` +
+          `1. Acesse: [youtube.com/@spikerhakofc](${YT_URL})\n` +
           `2. Clique em **"Inscrever-se"** (o botão deve mudar para **"Inscrito"**).\n` +
-          `3. Tire uma print nítida onde apareça o nome **@natansitesofc** e o botão **"Inscrito"**.\n` +
+          `3. Tire uma print nítida onde apareça o nome **@spikerhakofc** e o botão **"Inscrito"**.\n` +
           `4. Envie a nova print aqui neste canal.\n\n` +
           `*(Essa mensagem será apagada em 20 segundos)*`
         )
