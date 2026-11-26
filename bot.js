@@ -11,14 +11,7 @@ const {
 } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const Tesseract = require('tesseract.js');
-let sharp = null;
-try {
-  sharp = require('sharp');
-} catch (_) {
-  console.warn('[SpikerBot] sharp não instalado — rodando OCR sem pré-processamento.');
-}
+const { mediaType, verifyAttachment } = require('./subscription');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) throw new Error('DISCORD_TOKEN não configurado.');
@@ -65,86 +58,6 @@ function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
-// Validador OCR rigoroso anti-falso-positivo (PC + Celular + Prints com Zoom/Recorte)
-function validateSubscription(rawText) {
-  if (!rawText || rawText.trim().length === 0) {
-    return { valid: false, reason: 'Nenhum texto detectado na imagem enviada.' };
-  }
-
-  // Normalizar: remover acentos, minúsculas, caracteres especiais
-  const clean = rawText
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[@#_]/g, '');
-
-  const compact = clean.replace(/\s+/g, '');
-
-  console.log('[OCR Analisado]:', clean.replace(/\n+/g, ' ').substring(0, 300));
-
-  // 1. Validar identificação do canal (@spikerhakofc / SpikerHak - tolerante a zoom e OCR mobile)
-  const hasChannel =
-    compact.includes('spikerhakofc') ||
-    compact.includes('spikerhak') ||
-    /sp[il1]k[e3]r\s*h[a4]k/i.test(clean);
-
-  if (!hasChannel) {
-    return {
-      valid: false,
-      reason: 'O canal @spikerhakofc não foi identificado na print. Certifique-se de mostrar o nome ou o @ do canal.'
-    };
-  }
-
-  // 2. Se for o próprio criador/proprietário do canal logado (PC ou Celular)
-  const isOwner =
-    clean.includes('seucanal') ||
-    clean.includes('seu canal') ||
-    clean.includes('seusvideos') ||
-    clean.includes('seus videos') ||
-    clean.includes('gerenciar videos') ||
-    clean.includes('personalizar canal') ||
-    clean.includes('editar canal');
-
-  if (isOwner) {
-    return { valid: true, isOwner: true };
-  }
-
-  // 3. Validar se o botão está como NÃO inscrito (Inscrever-se / Inscreva-se / Subscribe)
-  const hasUnsubscribedButton =
-    /[il1|]nscrev[ea]r?-?se/i.test(clean) ||
-    clean.includes('inscrever') ||
-    clean.includes('inscreva') ||
-    /\bsubscribe\b/i.test(clean);
-
-  // 4. Validar se o botão está como INSCRITO (PC + Mobile + Zoom/Recorte)
-  // Ignora explicitamente "inscritos" (plural, contador do canal) para evitar falso positivo.
-  // Tolera ícones de sino/seta colados ao botão "Inscrito" em prints com zoom ou tema escuro.
-  const withoutSubscriberCount = clean.replace(/\b\d[\d.,\skm]*\s*[il1|]nscr[il1|]t[oa0]s\b/gi, '');
-
-  const hasSubscribedButton =
-    /(?:^|[\s\W\d])[il1|]nscr[il1|]t[oa0](?:$|[\s\Wv▾▼>\]\)])/i.test(withoutSubscriberCount) ||
-    /(?:^|[\s\W])subscr[il1|]bed(?:$|[\s\Wv▾▼>\]\)])/i.test(withoutSubscriberCount) ||
-    /(?:^|[\s\W])suscr[il1|]t[oa0](?:$|[\s\Wv▾▼>\]\)])/i.test(withoutSubscriberCount) ||
-    // Menu de notificações do sino aberto (só existe quando já está inscrito)
-    (/\b(todas|personalizadas|nenhuma|cancelar inscricao)\b/i.test(withoutSubscriberCount) && !hasUnsubscribedButton);
-
-  if (hasUnsubscribedButton && !hasSubscribedButton) {
-    return {
-      valid: false,
-      reason: 'Você ainda não clicou em "Inscrever-se". O status deve estar como "Inscrito"!'
-    };
-  }
-
-  if (!hasSubscribedButton) {
-    return {
-      valid: false,
-      reason: 'Status de "Inscrito" não foi encontrado na print.'
-    };
-  }
-
-  return { valid: true };
-}
-
 // Banco de hashes de prints já aprovadas (impede reutilizar print de outra pessoa)
 const HASHES_FILE = path.join(__dirname, 'verified_hashes.json');
 function loadHashes() {
@@ -159,65 +72,22 @@ function saveHashes(hashes) {
   fs.writeFileSync(HASHES_FILE, JSON.stringify(hashes, null, 2), 'utf8');
 }
 
-// Executa OCR com pré-processamento (Modo Escuro + Zoom/Recorte) + proteção anti-duplicata
-async function recognizeWithZoomSupport(imageUrl, userId) {
-  const res = await fetch(imageUrl);
-  if (!res.ok) throw new Error(`Falha ao baixar imagem: HTTP ${res.status}`);
-  const imgBuffer = Buffer.from(await res.arrayBuffer());
+const pendingProofs = new Set();
+const proofQueue = [];
+let runningProofs = 0;
 
-  // 1. Checagem anti-fraude: impedir que outro usuário reutilize a mesma print
-  const imgHash = crypto.createHash('sha256').update(imgBuffer).digest('hex');
-  const hashes = loadHashes();
-  if (hashes[imgHash] && hashes[imgHash] !== userId) {
-    return {
-      text: '',
-      imgHash,
-      validation: {
-        valid: false,
-        reason: 'Essa print já foi usada por outro membro! Tire uma print nova da sua própria tela.'
-      }
-    };
+async function waitForProofSlot() {
+  if (runningProofs >= 2) {
+    await new Promise(resolve => proofQueue.push(resolve));
+  } else {
+    runningProofs++;
   }
+}
 
-  // 2. Passada 1: imagem original (ideal para Modo Claro)
-  const pass1 = await Tesseract.recognize(imgBuffer, 'por+eng', {
-    logger: () => {}
-  });
-  const text1 = pass1.data.text || '';
-  const check1 = validateSubscription(text1);
-  if (check1.valid) {
-    return { text: text1, imgHash, validation: check1 };
-  }
-
-  // 3. Passada 2: pré-processamento para Modo Escuro + Zoom (grayscale + negate + normalize + sharpen + upscale) com PSM 11
-  let processedBuffer = imgBuffer;
-  if (sharp) {
-    try {
-      const meta = await sharp(imgBuffer).metadata();
-      const targetWidth = meta.width ? Math.min(meta.width * 2, 2400) : 1600;
-      processedBuffer = await sharp(imgBuffer)
-        .grayscale()
-        .negate({ alpha: false })
-        .normalize()
-        .sharpen()
-        .resize({ width: targetWidth, withoutEnlargement: false })
-        .png()
-        .toBuffer();
-    } catch (err) {
-      console.warn('[SpikerBot OCR] Fallback sem sharp:', err.message);
-    }
-  }
-
-  const worker = await Tesseract.createWorker('por+eng');
-  try {
-    await worker.setParameters({ tessedit_pageseg_mode: '11' });
-    const pass2 = await worker.recognize(processedBuffer);
-    const text2 = pass2.data.text || '';
-    const combinedText = `${text1}\n${text2}`;
-    return { text: combinedText, imgHash, validation: validateSubscription(combinedText) };
-  } finally {
-    await worker.terminate();
-  }
+function releaseProofSlot() {
+  const next = proofQueue.shift();
+  if (next) next();
+  else runningProofs--;
 }
 
 const client = new Client({
@@ -724,7 +594,7 @@ client.on('guildMemberAdd', async (member) => {
       .setTitle('👋 ┃ BEM-VINDO AO SPIKERHAK!')
       .setDescription(
         `Fala ${member}! Seja bem-vindo ao **SpikerHak**.\n` +
-        `Envie o print da sua inscrição em <#${LIBERAR_CHANNEL_ID}> para liberar o servidor completo!`
+        `Envie um print ou vídeo da sua inscrição em <#${LIBERAR_CHANNEL_ID}> para liberar o servidor completo!`
       )
       .setColor(0x00FFCC)
       .setThumbnail(member.user.displayAvatarURL({ extension: 'png', size: 256 }))
@@ -757,27 +627,50 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // Verificar se há anexos de imagem
-  const imageAttachment = message.attachments.find(a =>
-    a.contentType && (a.contentType.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(a.name || ''))
-  );
-
-  if (!imageAttachment) {
-    const errorMsg = await message.reply('⚠️ Por favor, envie uma **imagem/print** comprovando sua inscrição no canal [youtube.com/@spikerhakofc](https://www.youtube.com/@spikerhakofc)!');
+  const proofs = [...message.attachments.values()].filter(mediaType);
+  if (!proofs.length) {
+    const errorMsg = await message.reply('⚠️ Envie uma imagem ou um vídeo mostrando sua inscrição no canal [@spikerhakofc](https://www.youtube.com/@spikerhakofc).');
     setTimeout(() => errorMsg.delete().catch(() => {}), 10000);
     return;
   }
 
-  // Adicionar reação de processando
-  try {
-    await message.react('⏳');
-  } catch (_) {}
+  if (pendingProofs.has(message.author.id)) {
+    const busyReply = await message.reply('⏳ Seu comprovante anterior ainda está na fila de verificação.');
+    setTimeout(() => busyReply.delete().catch(() => {}), 10000);
+    return;
+  }
+  pendingProofs.add(message.author.id);
 
-  console.log(`[SpikerBot OCR] Processando print enviada por ${message.author.tag} (${imageAttachment.url})...`);
-
+  await message.react('⏳').catch(() => {});
+  await waitForProofSlot();
   try {
-    // Executar OCR com pré-processamento (Modo Escuro + Zoom) e anti-duplicata
-    const { imgHash, validation } = await recognizeWithZoomSupport(imageAttachment.url, message.author.id);
+    const belongsToAnotherMember = hash => {
+      const owner = loadHashes()[hash];
+      return Boolean(owner && owner !== message.author.id);
+    };
+    let validation;
+    let processingError;
+    for (const proof of proofs) {
+      try {
+        validation = await verifyAttachment(proof, belongsToAnotherMember);
+        if (!validation.valid) continue;
+
+        // Conferir novamente porque outro membro pode ter enviado o arquivo durante a análise.
+        const hashes = loadHashes();
+        const owner = hashes[validation.hash];
+        if (owner && owner !== message.author.id) {
+          validation = { valid: false, reason: 'Esse arquivo já foi usado por outro membro. Envie um comprovante da sua própria tela.' };
+          continue;
+        }
+        hashes[validation.hash] = message.author.id;
+        saveHashes(hashes);
+        break;
+      } catch (error) {
+        if (validation?.valid) throw error;
+        processingError = error;
+      }
+    }
+    if (!validation) throw processingError;
 
     // Remover reação de ampulheta
     try {
@@ -786,12 +679,6 @@ client.on('messageCreate', async (message) => {
     } catch (_) {}
 
     if (validation.valid) {
-      // ✅ APROVADO! Salvar hash da print para evitar reutilização por terceiros
-      if (imgHash) {
-        const hashes = loadHashes();
-        hashes[imgHash] = message.author.id;
-        saveHashes(hashes);
-      }
       await message.react('✅');
 
       // Atribuir cargos
@@ -840,13 +727,13 @@ client.on('messageCreate', async (message) => {
       const rejectEmbed = new EmbedBuilder()
         .setTitle('❌ ┃ NÃO FOI POSSÍVEL CONFIRMAR SUA INSCRIÇÃO')
         .setDescription(
-          `Olá ${message.author}, nossa IA analisou sua print mas **não encontrou a comprovação de inscrição**.\n\n` +
+          `Olá ${message.author}, não consegui confirmar sua inscrição pelo comprovante enviado.\n\n` +
           `**Motivo:** ${validation.reason}\n\n` +
           `### 📌 Como resolver:\n` +
           `1. Acesse: [youtube.com/@spikerhakofc](${YT_URL})\n` +
           `2. Clique em **"Inscrever-se"** (o botão deve mudar para **"Inscrito"**).\n` +
-          `3. Tire uma print nítida onde apareça o nome **@spikerhakofc** e o botão **"Inscrito"**.\n` +
-          `4. Envie a nova print aqui neste canal.\n\n` +
+          `3. Mostre o canal **SpikerHak** com o botão **"Inscrito"** ou o sininho da inscrição.\n` +
+          `4. Envie um novo print ou vídeo aqui neste canal.\n\n` +
           `*(Essa mensagem será apagada em 20 segundos)*`
         )
         .setColor(0xE74C3C)
@@ -864,8 +751,12 @@ client.on('messageCreate', async (message) => {
       await message.react('❌');
     } catch (_) {}
 
-    const errReply = await message.reply('❌ Ocorreu um erro ao processar a imagem. Por favor, envie uma print em formato JPG ou PNG mais nítida!');
+    const detail = err?.userMessage || 'Envie outro print (PNG ou JPG) ou vídeo (MP4, MOV ou WebM).';
+    const errReply = await message.reply('❌ Não consegui processar o comprovante. ' + detail);
     setTimeout(() => errReply.delete().catch(() => {}), 15000);
+  } finally {
+    pendingProofs.delete(message.author.id);
+    releaseProofSlot();
   }
 });
 
