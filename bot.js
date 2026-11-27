@@ -250,7 +250,7 @@ const DONATIONS_CHANNEL_ID = '1574965060281966632'; // 💸・doações
 const donations = createDonationsService({
   guildId: GUILD_ID,
   channelId: DONATIONS_CHANNEL_ID,
-  baseUrl: process.env.RENDER_EXTERNAL_URL || SELF_PING_URL
+  baseUrl: process.env.DONATIONS_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || SELF_PING_URL
 });
 
 const server = http.createServer(async (req, res) => {
@@ -292,7 +292,7 @@ client.once('ready', async () => {
   });
   giveaways.startExpiration(client);
   client.channels.fetch(DONATIONS_CHANNEL_ID).then(channel => {
-    if (channel?.isSendable()) return donations.publishPanel(channel, client.user.id);
+    if (channel?.isSendable()) return donations.publishPanel(channel, client.user.id, process.env.DONATIONS_ANNOUNCEMENT);
   }).catch(error => console.error('[Doações] Não foi possível atualizar o painel:', error.code || error.name));
 
   // Garantir que o painel de tickets está publicado em 🎫・abrir-ticket

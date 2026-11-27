@@ -1,4 +1,4 @@
-const { createHmac, randomBytes, timingSafeEqual } = require('node:crypto');
+const { createHash, createHmac, randomBytes, timingSafeEqual } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
@@ -12,6 +12,7 @@ const PANEL_TITLE = '💸 ┃ APOIE O SPIKERHAK — DOAÇÕES VIA PIX';
 const PIX_ID = /^[a-zA-Z0-9_-]{1,100}$/;
 const ASSETS = new Map([
   ['/doar', ['checkout.html', 'text/html; charset=utf-8']],
+  ['/doar/', ['checkout.html', 'text/html; charset=utf-8']],
   ['/doar/checkout.css', ['checkout.css', 'text/css; charset=utf-8']],
   ['/doar/checkout.js', ['checkout.js', 'application/javascript; charset=utf-8']]
 ].map(([route, [name, type]]) => [route, [type, fs.readFileSync(path.join(__dirname, 'donations', name))]]));
@@ -229,7 +230,7 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
       byUser.set(interaction.user.id, token);
     }
     const checkout = new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Abrir página de doação')
-      .setURL(new URL('/doar#' + token, publicUrl).href);
+      .setURL(new URL('/doar/#' + token, publicUrl).href);
     await interaction.reply({
       content: 'Abra seu link privado para escolher o valor e gerar o Pix.',
       flags: MessageFlags.Ephemeral, components: [new ActionRowBuilder().addComponents(checkout)]
@@ -237,7 +238,7 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     return true;
   }
 
-  async function publishPanel(channel, botId) {
+  async function publishPanel(channel, botId, announcement) {
     if (!enabled || channel.id !== channelId) return;
     const messages = await channel.messages.fetch({ limit: 50 });
     const previous = messages.find(message => message.author.id === botId &&
@@ -252,6 +253,16 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     else if (previous.embeds[0]?.description !== embed.data.description ||
         !previous.components.some(row => row.components?.some(component => component.customId === DONATE_BUTTON))) {
       await previous.edit(panel);
+    }
+    if (announcement?.startsWith('@everyone ') && announcement.length <= 2000 &&
+        !messages.some(message => message.author.id === botId && message.content === announcement)) {
+      const nonce = createHash('sha256').update(announcement).digest('hex').slice(0, 24);
+      await channel.send({
+        content: announcement,
+        allowedMentions: { parse: ['everyone'] },
+        nonce,
+        enforceNonce: true
+      });
     }
   }
 

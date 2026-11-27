@@ -29,3 +29,5 @@ Por padrão, sorteios e inscrições são gravados em `giveaways_data.json`. Em 
 O painel no canal **💸・doações** abre um link privado para o checkout do SpikerHak. O servidor aceita doações a partir de **R$ 2,52**, consulta a taxa na PromissePay, cria o QR Code e consulta o estado do pagamento na própria API do gateway. A doação é voluntária e independente dos sorteios.
 
 Configure a credencial da PromissePay com os escopos `payments.create` e `payments.read` como `PROMISSE_API_KEY` no ambiente ou no arquivo secreto do Render com esse nome. O checkout usa a URL HTTPS configurada no serviço por `RENDER_EXTERNAL_URL` ou `KEEP_ALIVE_URL`.
+
+Para hospedar o checkout no Cloudflare Pages, gere os arquivos com `node donations/build-pages.js` e publique a pasta `pages-checkout`. Defina `DONATIONS_PUBLIC_URL` no Render com a origem HTTPS canônica do projeto. O Cloudflare encaminha os pedidos de Pix ao servidor do SpikerBot e a credencial permanece no Render.

@@ -1,4 +1,5 @@
 node_modules/
+pages-checkout/
 .env
 *.log
 tickets_data.json
