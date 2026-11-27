@@ -12,7 +12,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { createGiveawayHandler, registerGiveawayCommand } = require('./giveaways');
+const { createGiveawayService, registerGiveawayCommands } = require('./giveaways');
 const Tesseract = require('tesseract.js');
 let sharp = null;
 try {
@@ -50,8 +50,9 @@ const staffRoleIds = [
   roles['🛡️・Moderador']
 ].filter(Boolean);
 
-const handleGiveaway = createGiveawayHandler({
+const giveaways = createGiveawayService({
   guildId: GUILD_ID,
+  testChannelId: '1574896990129496289', // 🤖・comandos-admin
   staffRoleIds,
   dataFile: process.env.GIVEAWAYS_DATA_FILE || path.join(__dirname, 'giveaways_data.json')
 });
@@ -272,9 +273,10 @@ server.listen(PORT, () => {
 
 client.once('ready', async () => {
   console.log(`[SpikerBot] Online como ${client.user.tag}!`);
-  client.guilds.fetch(GUILD_ID).then(registerGiveawayCommand).catch(error => {
-    console.error('[Sorteio] Não foi possível registrar /sorteio:', error);
+  client.guilds.fetch(GUILD_ID).then(registerGiveawayCommands).catch(error => {
+    console.error('[Sorteio] Não foi possível registrar os comandos:', error);
   });
+  giveaways.startExpiration(client);
 
   // Garantir que o painel de tickets está publicado em 🎫・abrir-ticket
   try {
@@ -882,7 +884,7 @@ client.on('messageCreate', async (message) => {
 
 // EVENTO: SISTEMA DE TICKETS
 client.on('interactionCreate', async (interaction) => {
-  if (await handleGiveaway(interaction)) return;
+  if (await giveaways.handleInteraction(interaction)) return;
   if (!interaction.isButton()) return;
 
   const data = loadData();
