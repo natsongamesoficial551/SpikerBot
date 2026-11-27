@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Doações via Pix | SpikerHak</title>
+  <link rel="stylesheet" href="/doar/checkout.css">
+  <script defer src="/doar/checkout.js"></script>
+</head>
+<body>
+  <main class="checkout">
+    <p class="brand">SpikerHak</p>
+    <h1>Doe via Pix</h1>
+    <p>Apoie a comunidade com uma contribuição voluntária. O pagamento é processado pela PromissePay.</p>
+    <form id="donation" hidden>
+      <label for="amount">Valor da doação, em reais</label>
+      <div class="amount"><span aria-hidden="true">R$</span><input id="amount" inputmode="decimal" autocomplete="off" value="2,52" maxlength="8" required aria-describedby="minimum"></div>
+      <p id="minimum" class="helper">Mínimo de R$ 2,52</p>
+      <button class="primary" type="submit">Gerar QR Code</button>
+    </form>
+    <section id="payment" hidden>
+      <h2 id="total"></h2>
+      <p id="expiry" class="helper"></p>
+      <img id="qr" width="256" height="256" alt="QR Code Pix para a doação">
+      <label for="pix-code">Pix copia e cola</label>
+      <textarea id="pix-code" rows="3" readonly spellcheck="false"></textarea>
+      <div class="actions">
+        <button class="primary" id="copy" type="button">Copiar Pix</button>
+        <button class="secondary" id="check" type="button">Verificar pagamento</button>
+      </div>
+    </section>
+    <p id="status" role="status" aria-live="polite"></p>
+    <noscript>Ative o JavaScript para gerar e consultar o Pix nesta página.</noscript>
+  </main>
+</body>
+</html>

@@ -23,3 +23,9 @@ Na última etapa, clique em **Definir duração** e informe um tempo, como `30m`
 Use `/sorte-test` para passar pelas mesmas etapas e publicar um painel marcado como **[TESTE]** apenas no canal **🤖・comandos-admin**.
 
 Por padrão, sorteios e inscrições são gravados em `giveaways_data.json`. Em uma hospedagem com sistema de arquivos temporário, configure `GIVEAWAYS_DATA_FILE` com o caminho do arquivo em um volume persistente.
+
+## Doações via Pix
+
+O painel no canal **💸・doações** abre um link privado para o checkout do SpikerHak. O servidor aceita doações a partir de **R$ 2,52**, consulta a taxa na PromissePay, cria o QR Code e consulta o estado do pagamento na própria API do gateway. A doação é voluntária e independente dos sorteios.
+
+Configure a credencial da PromissePay com os escopos `payments.create` e `payments.read` como `PROMISSE_API_KEY` no ambiente ou no arquivo secreto do Render com esse nome. O checkout usa a URL HTTPS configurada no serviço por `RENDER_EXTERNAL_URL` ou `KEEP_ALIVE_URL`.

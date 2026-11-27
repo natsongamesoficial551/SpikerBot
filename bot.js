@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { createGiveawayService, registerGiveawayCommands } = require('./giveaways');
+const { createDonationsService } = require('./donations');
 const Tesseract = require('tesseract.js');
 let sharp = null;
 try {
@@ -245,10 +246,23 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 const SELF_PING_URL = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
 const SELF_PING_INTERVAL_MS = 7 * 60 * 1000;
+const DONATIONS_CHANNEL_ID = '1574965060281966632'; // 💸・doações
+const donations = createDonationsService({
+  guildId: GUILD_ID,
+  channelId: DONATIONS_CHANNEL_ID,
+  baseUrl: process.env.RENDER_EXTERNAL_URL || SELF_PING_URL
+});
 
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('SpikerBot is running 24/7 on Render!\n');
+const server = http.createServer(async (req, res) => {
+  try {
+    if (await donations.handleHttp(req, res)) return;
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('SpikerBot is running 24/7 on Render!\n');
+  } catch (error) {
+    console.error('[SpikerBot HTTP] Falha na requisição:', error.name);
+    if (!res.headersSent) res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Requisição inválida.\n');
+  }
 });
 
 server.listen(PORT, () => {
@@ -277,6 +291,9 @@ client.once('ready', async () => {
     console.error('[Sorteio] Não foi possível registrar os comandos:', error);
   });
   giveaways.startExpiration(client);
+  client.channels.fetch(DONATIONS_CHANNEL_ID).then(channel => {
+    if (channel?.isSendable()) return donations.publishPanel(channel, client.user.id);
+  }).catch(error => console.error('[Doações] Não foi possível atualizar o painel:', error.code || error.name));
 
   // Garantir que o painel de tickets está publicado em 🎫・abrir-ticket
   try {
@@ -884,6 +901,12 @@ client.on('messageCreate', async (message) => {
 
 // EVENTO: SISTEMA DE TICKETS
 client.on('interactionCreate', async (interaction) => {
+  try {
+    if (await donations.handleInteraction(interaction)) return;
+  } catch (error) {
+    console.error('[Doações] Não foi possível abrir o checkout:', error.code || error.name);
+    return;
+  }
   if (await giveaways.handleInteraction(interaction)) return;
   if (!interaction.isButton()) return;
 
