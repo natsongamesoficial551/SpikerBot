@@ -5,13 +5,14 @@ const form = $('donation');
 const status = $('status');
 const session = location.hash.slice(1);
 const storageKey = 'spiker-pix:' + session;
+const api = document.querySelector('meta[name="checkout-api"]').content;
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 let payment;
 
 function setStatus(text) { status.textContent = text; }
 
 async function call(action, body) {
-  const response = await fetch('/api/doacoes/' + action, {
+  const response = await fetch(api + '/api/doacoes/' + action, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)

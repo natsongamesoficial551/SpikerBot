@@ -194,9 +194,21 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     if (!pathname.startsWith('/api/doacoes/')) return false;
     try {
       if (!['/api/doacoes/pix','/api/doacoes/status'].includes(pathname)) throw new CheckoutError(404, 'Página não encontrada.');
-      if (req.method !== 'POST') throw new CheckoutError(405, 'Método não permitido.');
       if (!enabled) throw new CheckoutError(503, 'Doações por Pix estão indisponíveis.');
       if (req.headers.origin !== publicUrl.origin) throw new CheckoutError(403, 'Origem da página inválida.');
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Origin', publicUrl.origin);
+      if (req.method === 'OPTIONS' && req.headers['access-control-request-method'] === 'POST') {
+        res.writeHead(204, {
+          ...securityHeaders,
+          'Access-Control-Allow-Methods': 'POST',
+          'Access-Control-Allow-Headers': 'Content-Type',
+          'Access-Control-Max-Age': '300'
+        });
+        res.end();
+        return true;
+      }
+      if (req.method !== 'POST') throw new CheckoutError(405, 'Método não permitido.');
       const now = Date.now();
       cleanExpired(now);
       const body = await readJson(req);

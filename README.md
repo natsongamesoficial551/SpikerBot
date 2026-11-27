@@ -30,4 +30,4 @@ O painel no canal **💸・doações** abre um link privado para o checkout do S
 
 Configure a credencial da PromissePay com os escopos `payments.create` e `payments.read` como `PROMISSE_API_KEY` no ambiente ou no arquivo secreto do Render com esse nome. O checkout usa a URL HTTPS configurada no serviço por `RENDER_EXTERNAL_URL` ou `KEEP_ALIVE_URL`.
 
-Para hospedar o checkout no Cloudflare Pages, gere os arquivos com `node donations/build-pages.js` e publique a pasta `pages-checkout`. Defina `DONATIONS_PUBLIC_URL` no Render com a origem HTTPS canônica do projeto. O Cloudflare encaminha os pedidos de Pix ao servidor do SpikerBot e a credencial permanece no Render.
+Para hospedar o checkout no Cloudflare Pages, gere os arquivos com `node donations/build-pages.js` e publique a pasta `pages-checkout`. Defina `DONATIONS_PUBLIC_URL` no Render com a origem HTTPS canônica do projeto. O navegador usa a API do SpikerBot, que só aceita a origem configurada. A credencial permanece no Render.
