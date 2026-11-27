@@ -42,7 +42,6 @@ function createForm(test) {
     .setTitle(test ? 'Criar sorteio de teste' : 'Criar sorteio').addLabelComponents(
     field('name', 'Nome do sorteio', { max: 100 }),
     field('description', 'Descrição e regras', { max: 1500, style: TextInputStyle.Paragraph }),
-    field('entryPrice', 'Valor da participação (R$)', { max: 15, initial: '0', placeholder: '0 para participação gratuita' }),
     field('limit', 'Limite de pessoas (0 = ilimitado)', { max: 16, initial: '0' }),
     field('prizeValue', 'Valor do produto (R$)', { max: 15, initial: '0', placeholder: 'Ex.: 149,90' })
   );
@@ -81,7 +80,6 @@ function readForm(fields) {
   const read = id => fields.getTextInputValue(id).trim();
   const name = read('name');
   const description = read('description');
-  const entryPrice = moneyInCents(read('entryPrice'));
   const prizeValue = moneyInCents(read('prizeValue'));
   const limitInput = read('limit');
   const limit = Number(limitInput);
@@ -92,10 +90,10 @@ function readForm(fields) {
   if (!/^\d+$/.test(limitInput) || !Number.isSafeInteger(limit)) {
     return { error: 'Use um número inteiro no limite de pessoas. Digite 0 para deixar ilimitado.' };
   }
-  if (entryPrice === null || prizeValue === null) {
-    return { error: 'Use valores em reais a partir de 0, com até duas casas decimais. Exemplo: 49,90.' };
+  if (prizeValue === null) {
+    return { error: 'Informe o valor do produto em reais, com até duas casas decimais. Exemplo: 49,90.' };
   }
-  return { name, description, entryPrice, limit, prizeValue };
+  return { name, description, limit, prizeValue };
 }
 
 function readGiveaways(file) {
@@ -127,7 +125,7 @@ function renderPanel(giveaway) {
     .setDescription(giveaway.description)
     .setColor(open ? 0x5865F2 : giveaway.winnerId ? 0x2ECC71 : 0x747F8D)
     .addFields(
-      { name: 'Participação', value: giveaway.entryPrice ? currency.format(giveaway.entryPrice / 100) : 'Gratuita', inline: true },
+      { name: 'Participação', value: 'Gratuita', inline: true },
       { name: 'Valor do produto', value: currency.format(giveaway.prizeValue / 100), inline: true },
       { name: 'Participantes', value: giveaway.limit ? `${count} / ${giveaway.limit}` : `${count} / ilimitado`, inline: true },
       { name: 'Status', value: status, inline: true }
@@ -138,7 +136,6 @@ function renderPanel(giveaway) {
   }
   if (giveaway.winnerId) embed.addFields({ name: '🏆 Ganhador', value: `<@${giveaway.winnerId}>` });
   else if (giveaway.status === 'ended') embed.addFields({ name: 'Resultado', value: 'O sorteio terminou sem participantes.' });
-  if (giveaway.entryPrice) embed.setFooter({ text: 'Valor informativo. O botão de participação não cobra pagamentos.' });
 
   const button = (action, label, style, disabled = false) => new ButtonBuilder()
     .setCustomId(`giveaway:${action}:${giveaway.id}`)
@@ -306,7 +303,16 @@ function createGiveawayService({ guildId, staffRoleIds, dataFile, testChannelId 
     for (const [id, draft] of drafts) {
       if (draft.expiresAt <= now) drafts.delete(id);
     }
-    const due = Object.values(readGiveaways(dataFile)).filter(giveaway =>
+    const stored = readGiveaways(dataFile);
+    let removedLegacyPrice = false;
+    for (const giveaway of Object.values(stored)) {
+      if (giveaway.guildId !== guildId || !Object.hasOwn(giveaway, 'entryPrice')) continue;
+      if (giveaway.entryPrice > 0 && giveaway.messageId) giveaway.panelPending = true;
+      delete giveaway.entryPrice;
+      removedLegacyPrice = true;
+    }
+    if (removedLegacyPrice) saveGiveaways(dataFile, stored);
+    const due = Object.values(stored).filter(giveaway =>
       giveaway.guildId === guildId && giveaway.messageId && !updates.has(giveaway.id) &&
       (giveaway.panelPending || isDue(giveaway, now)));
     await Promise.all(due.map(({ id }) => enqueue(id, async () => {

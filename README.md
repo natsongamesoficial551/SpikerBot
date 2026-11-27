@@ -16,7 +16,7 @@ Bot oficial da comunidade **SpikerHak** focado em Inteligência Artificial, Prov
 
 ## Sorteios
 
-A equipe cria, cancela ou encerra sorteios pelo painel. O formulário pede nome, descrição, valor da participação, limite de pessoas e valor do produto. Digite **0** no limite para deixar as vagas ilimitadas e **0** no valor da participação para deixar a entrada gratuita. Os valores são informativos.
+A equipe cria, cancela ou encerra sorteios pelo painel. O formulário pede nome, descrição, limite de pessoas e valor do produto. Digite **0** no limite para deixar as vagas ilimitadas. A participação é sempre gratuita e o valor do produto é apenas informativo.
 
 Na última etapa, clique em **Definir duração** e informe um tempo, como `30m`, `2h`, `1h 30m` ou `3d`. O painel mostra o horário de encerramento e os membros podem entrar e sair até lá. Ao atingir o prazo, o bot fecha as inscrições e sorteia uma pessoa entre as inscritas. A equipe também pode antecipar o sorteio com **Sortear ganhador**.
 
