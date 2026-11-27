@@ -12,6 +12,7 @@ const { hasNotificationBell } = require('./subscription-bell');
 const run = promisify(execFile);
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_SECONDS = 120;
+const MAX_IMAGE_EDGE = 2200;
 const imageOptions = { limitInputPixels: 24_000_000 };
 
 const normalize = text => text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -33,9 +34,8 @@ function mediaType(attachment) {
   return null;
 }
 
-async function download(attachment) {
-  if (attachment.size > MAX_BYTES) throw new ProofInputError('O arquivo deve ter até 25 MB.');
-  const response = await fetch(attachment.url, { signal: AbortSignal.timeout(20_000) });
+async function download(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   if (!response.ok || !response.body) throw new Error(`Falha ao baixar anexo: HTTP ${response.status}`);
 
   const chunks = [];
@@ -46,6 +46,52 @@ async function download(attachment) {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks, size);
+}
+
+function imagePreviewUrl(attachment) {
+  if (!attachment.proxyURL) return null;
+  let preview;
+  let original;
+  try {
+    preview = new URL(attachment.proxyURL);
+    original = new URL(attachment.url);
+  } catch {
+    return null;
+  }
+  if (preview.origin !== 'https://media.discordapp.net' || !preview.pathname.startsWith('/attachments/') ||
+      original.pathname !== preview.pathname) return null;
+  preview.searchParams.set('format', 'webp');
+  if (attachment.width > 0 && attachment.height > 0) {
+    const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(attachment.width, attachment.height));
+    preview.searchParams.set('width', String(Math.max(1, Math.round(attachment.width * scale))));
+    preview.searchParams.set('height', String(Math.max(1, Math.round(attachment.height * scale))));
+  }
+  return preview.href;
+}
+
+async function prepareFrame(frame) {
+  return sharp(frame, imageOptions).rotate().flatten({ background: '#fff' })
+    .resize({ width: MAX_IMAGE_EDGE, height: MAX_IMAGE_EDGE, fit: 'inside' })
+    .toColourspace('b-w').raw().toBuffer({ resolveWithObject: true });
+}
+
+async function readImageProof(attachment) {
+  try {
+    const buffer = await download(attachment.url);
+    return { buffer, gray: await prepareFrame(buffer) };
+  } catch (error) {
+    if (error instanceof ProofInputError) throw error;
+    const previewUrl = imagePreviewUrl(attachment);
+    if (previewUrl && previewUrl !== attachment.url) {
+      try {
+        const buffer = await download(previewUrl);
+        return { buffer, gray: await prepareFrame(buffer) };
+      } catch (previewError) {
+        if (previewError instanceof ProofInputError) throw previewError;
+      }
+    }
+    throw new ProofInputError('O Discord não entregou uma imagem legível. Reenvie o print em PNG ou JPG.');
+  }
 }
 
 function ffmpegPath() {
@@ -147,15 +193,28 @@ function hasSubscriptionText(words) {
     if (!subscribed.test(word.text)) return false;
     const height = word.y1 - word.y0;
     // "1 inscrito" is a subscriber count, not the member's subscription state.
-    return !words.some(previous => /^\d+(?:[.,]\d+)?$/.test(previous.text) &&
+    return !words.some(previous => /^(?:\d+(?:[.,]\d+)?[km]?|mil|million|milhao|milhoes)$/.test(previous.text) &&
       onSameLine(word, previous) && previous.x1 <= word.x0 && word.x0 - previous.x1 < height * 1.5);
   });
 }
 
-async function scanFrame(worker, frame, thorough) {
-  const input = sharp(frame, imageOptions).rotate().flatten({ background: '#fff' });
-  const gray = await input.clone().resize({ width: 2200, height: 2200, fit: 'inside' })
-    .toColourspace('b-w').raw().toBuffer({ resolveWithObject: true });
+function belongsToMobileOverlay(channel, words, width) {
+  const commentHeader = words.some(word => /^(?:comentarios|comments)$/.test(word.text) &&
+    word.x0 < width * 0.16 && word.y1 < channel.y0 &&
+    channel.y0 - word.y1 < width * 0.42 &&
+    word.y1 - word.y0 >= (channel.y1 - channel.y0) * 0.8);
+  if (commentHeader) return true;
+
+  // The expanded description shows the author followed by a row of counters
+  // (likes and views), while the subscription controls are behind the sheet.
+  const labelHeight = channel.y1 - channel.y0;
+  return words.some(views => /^(?:visualizacoes|views)$/.test(views.text) &&
+    views.y0 > channel.y1 + labelHeight && views.y0 < channel.y1 + labelHeight * 8 &&
+    words.some(likes => /^(?:marcacoes|gostei|likes)$/.test(likes.text) &&
+      likes.x1 < views.x0 && onSameLine(views, likes)));
+}
+
+async function scanFrame(worker, gray, thorough) {
   const { width, height } = gray.info;
   const source = () => sharp(gray.data, { raw: { width, height, channels: 1 } });
 
@@ -169,13 +228,31 @@ async function scanFrame(worker, frame, thorough) {
   if (thorough) {
     if (!portrait) passes.push({ image: caption.negate().normalise().sharpen(), top: captionTop });
     passes.push({ image: source().normalise().sharpen(), top: 0 });
+
+    // Read the YouTube controls independently when the player, recommendations or
+    // comments overwhelm the smaller channel label and subscription button.
+    const top = Math.floor(height * (portrait ? 0.14 : 0.16));
+    const bottom = Math.ceil(height * (portrait ? 0.67 : 0.96));
+    const cropWidth = Math.ceil(width * (portrait ? 1 : 0.56));
+    const ocrWidth = Math.min(MAX_IMAGE_EDGE, Math.ceil(cropWidth * 1.35));
+    const scale = ocrWidth / cropWidth;
+    const image = source().extract({ left: 0, top, width: cropWidth, height: bottom - top })
+      .resize({ width: ocrWidth }).normalise().sharpen();
+    passes.push({ image, top, scale });
   }
 
   let foundChannel = false;
-  for (const { image, top } of passes) {
+  for (const { image, top, scale = 1 } of passes) {
     const { data } = await worker.recognize(await image.png().toBuffer(), {}, { blocks: true });
-    const words = wordsFrom(data).map(word => ({ ...word, y0: word.y0 + top, y1: word.y1 + top }));
+    const words = wordsFrom(data).map(word => ({
+      text: word.text,
+      x0: Math.round(word.x0 / scale),
+      x1: Math.round(word.x1 / scale),
+      y0: Math.round(word.y0 / scale) + top,
+      y1: Math.round(word.y1 / scale) + top
+    }));
     for (const channel of channelLabels(words)) {
+      if (portrait && belongsToMobileOverlay(channel, words, width)) continue;
       if (!channel.needsConfirmation) foundChannel = true;
       const nearby = words.filter(word => word !== channel && nearChannel(channel, word.x0, (word.y0 + word.y1) / 2));
       if (nearby.some(word => subscribe.test(word.text.replace(/-/g, '')))) continue;
@@ -206,13 +283,14 @@ async function scanFrame(worker, frame, thorough) {
 }
 
 async function verifyAttachment(attachment, hasOtherOwner) {
-  const buffer = await download(attachment);
+  if (attachment.size > MAX_BYTES) throw new ProofInputError('O arquivo deve ter até 25 MB.');
+  const isVideo = mediaType(attachment) === 'video';
+  const { buffer, gray } = isVideo ? { buffer: await download(attachment.url) } : await readImageProof(attachment);
   const hash = createHash('sha256').update(buffer).digest('hex');
   if (hasOtherOwner(hash)) {
     return { hash, valid: false, reason: 'Esse arquivo já foi usado por outro membro. Envie um comprovante da sua própria tela.' };
   }
-  const isVideo = mediaType(attachment) === 'video';
-  const frames = isVideo ? videoFrames(buffer) : [buffer];
+  const frames = isVideo ? videoFrames(buffer) : [gray];
   let worker;
   let foundChannel = false;
   try {
@@ -221,7 +299,7 @@ async function verifyAttachment(attachment, hasOtherOwner) {
         worker = await createWorker('por+eng');
         await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
       }
-      const result = await scanFrame(worker, frame, !isVideo);
+      const result = await scanFrame(worker, isVideo ? await prepareFrame(frame) : frame, !isVideo);
       if (result.valid) return { hash, valid: true };
       foundChannel ||= result.foundChannel;
     }
