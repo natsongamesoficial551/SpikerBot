@@ -12,6 +12,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { createGiveawayHandler, registerGiveawayCommand } = require('./giveaways');
 const Tesseract = require('tesseract.js');
 let sharp = null;
 try {
@@ -48,6 +49,12 @@ const staffRoleIds = [
   roles['⚡・Administrador'],
   roles['🛡️・Moderador']
 ].filter(Boolean);
+
+const handleGiveaway = createGiveawayHandler({
+  guildId: GUILD_ID,
+  staffRoleIds,
+  dataFile: process.env.GIVEAWAYS_DATA_FILE || path.join(__dirname, 'giveaways_data.json')
+});
 
 // Arquivo de persistência de dados de tickets
 const DATA_FILE = path.join(__dirname, 'tickets_data.json');
@@ -265,13 +272,17 @@ server.listen(PORT, () => {
 
 client.once('ready', async () => {
   console.log(`[SpikerBot] Online como ${client.user.tag}!`);
+  client.guilds.fetch(GUILD_ID).then(registerGiveawayCommand).catch(error => {
+    console.error('[Sorteio] Não foi possível registrar /sorteio:', error);
+  });
 
   // Garantir que o painel de tickets está publicado em 🎫・abrir-ticket
   try {
     const channel = await client.channels.fetch(TICKET_PANEL_CHANNEL_ID);
     if (channel && channel.isTextBased()) {
       const messages = await channel.messages.fetch({ limit: 5 });
-      const botMsg = messages.find(m => m.author.id === client.user.id && m.components.length > 0);
+      const botMsg = messages.find(m => m.author.id === client.user.id &&
+        m.components.some(row => row.components?.some(component => component.customId === 'open_ticket')));
       if (!botMsg) {
         const bannerPath = path.join(__dirname, 'banner.png');
         const logoPath = path.join(__dirname, 'logo.png');
@@ -871,6 +882,7 @@ client.on('messageCreate', async (message) => {
 
 // EVENTO: SISTEMA DE TICKETS
 client.on('interactionCreate', async (interaction) => {
+  if (await handleGiveaway(interaction)) return;
   if (!interaction.isButton()) return;
 
   const data = loadData();

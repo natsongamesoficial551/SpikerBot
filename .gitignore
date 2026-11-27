@@ -3,3 +3,5 @@ node_modules/
 *.log
 tickets_data.json
 verified_hashes.json
+giveaways_data.json
+giveaways_data.json.*.tmp
