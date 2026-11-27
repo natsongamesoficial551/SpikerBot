@@ -83,9 +83,13 @@ $('check').addEventListener('click', async () => {
   setStatus('Consultando a PromissePay…');
   try {
     const data = await call('status', { receipt: payment.receipt });
-    if (data.status === 'paid') {
+    if (data.status === 'paid' && data.donorRoleGranted === false) {
+      setStatus('Pix confirmado. O cargo ainda está pendente no Discord. Tente verificar de novo em instantes.');
+    } else if (data.status === 'paid') {
       $('payment').hidden = true;
-      setStatus('Pagamento confirmado. Obrigado por apoiar o SpikerHak!');
+      setStatus(data.donorRoleGranted
+        ? 'Pix confirmado. O cargo Doador foi liberado no Discord!'
+        : 'Pagamento confirmado. Obrigado por apoiar o SpikerHak!');
     } else if (data.status === 'expired') {
       $('payment').hidden = true;
       setStatus('Este Pix expirou ou foi cancelado. Gere outro pelo Discord.');

@@ -1,4 +1,4 @@
-const { createHash, createHmac, randomBytes, timingSafeEqual } = require('node:crypto');
+const { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageFlags } = require('discord.js');
@@ -7,9 +7,11 @@ const MIN_CENTS = 252;
 const MAX_CENTS = 100_000;
 const LINK_LIFETIME = 15 * 60_000;
 const RECEIPT_LIFETIME = 24 * 60 * 60_000;
+const CALLBACK_LIFETIME = 7 * RECEIPT_LIFETIME;
 const DONATE_BUTTON = 'spiker:donate-pix';
 const PANEL_TITLE = '💸 ┃ APOIE O SPIKERHAK — DOAÇÕES VIA PIX';
 const PIX_ID = /^[a-zA-Z0-9_-]{1,100}$/;
+const MEMBER_ID = /^\d{17,20}$/;
 const ASSETS = new Map([
   ['/doar', ['checkout.html', 'text/html; charset=utf-8']],
   ['/doar/', ['checkout.html', 'text/html; charset=utf-8']],
@@ -66,13 +68,20 @@ function configuredKey() {
   }
 }
 
-function createDonationsService({ guildId, channelId, baseUrl, apiKey = configuredKey(), request = fetch }) {
+function createDonationsService({
+  guildId, channelId, baseUrl, callbackUrl, applicationSecret, grantRole,
+  apiKey = configuredKey(), request = fetch
+}) {
   const publicUrl = new URL(baseUrl || 'https://unconfigured.invalid');
   const enabled = Boolean(apiKey && baseUrl && publicUrl.protocol === 'https:');
-  const receiptKey = createHmac('sha256', apiKey).update('spikerhak-pix-receipts').digest();
+  const callbackBase = callbackUrl ? new URL(callbackUrl) : null;
+  const rewards = Boolean(callbackBase?.protocol === 'https:' && applicationSecret && grantRole);
+  const legacyReceiptKey = createHmac('sha256', apiKey).update('spikerhak-pix-receipts').digest();
+  const keyFor = scope => createHmac('sha256', applicationSecret).update(scope).digest();
   const sessions = new Map();
   const byUser = new Map();
   const statusChecks = new Map();
+  const liveClaims = new Map();
   let rate = { from: 0, creations: 0, checks: 0 };
 
   function cleanExpired(now) {
@@ -84,6 +93,9 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     for (const [id, check] of statusChecks) {
       if (check.until <= now) statusChecks.delete(id);
     }
+    for (const [claim, payment] of liveClaims) {
+      if (payment.until <= now) liveClaims.delete(claim);
+    }
   }
 
   function takeRateLimit(operation, max, now) {
@@ -92,11 +104,11 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     rate[operation]++;
   }
 
-  async function gateway(route, amount) {
+  async function gateway(route, payload) {
     const response = await request('https://api.promisse.com.br' + route, {
-      method: amount === undefined ? 'GET' : 'POST',
-      headers: { Authorization: apiKey, Accept: 'application/json', ...(amount === undefined ? {} : { 'Content-Type': 'application/json' }) },
-      body: amount === undefined ? undefined : JSON.stringify({ amount }),
+      method: payload === undefined ? 'GET' : 'POST',
+      headers: { Authorization: apiKey, Accept: 'application/json', ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      body: payload === undefined ? undefined : JSON.stringify(payload),
       redirect: 'error',
       signal: AbortSignal.timeout(8000)
     });
@@ -107,18 +119,44 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     return response.json();
   }
 
+  function seal(scope, data) {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', keyFor(scope), iv);
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(data)), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url');
+  }
+
+  function unseal(scope, token) {
+    if (typeof token !== 'string' || !/^[a-zA-Z0-9_-]{40,500}$/.test(token)) {
+      throw new CheckoutError(403, 'Identificador inválido.');
+    }
+    try {
+      const packed = Buffer.from(token, 'base64url');
+      const decipher = createDecipheriv('aes-256-gcm', keyFor(scope), packed.subarray(0, 12));
+      decipher.setAuthTag(packed.subarray(12, 28));
+      return JSON.parse(Buffer.concat([decipher.update(packed.subarray(28)), decipher.final()]).toString('utf8'));
+    } catch {
+      throw new CheckoutError(403, 'Identificador inválido.');
+    }
+  }
+
   function signReceipt(id, amount, now) {
     const payload = Buffer.from(JSON.stringify([id, amount, now + RECEIPT_LIFETIME])).toString('base64url');
-    const signature = createHmac('sha256', receiptKey).update(payload).digest('base64url');
+    const signature = createHmac('sha256', legacyReceiptKey).update(payload).digest('base64url');
     return payload + '.' + signature;
   }
 
   function readReceipt(receipt, now) {
+    if (rewards && typeof receipt === 'string' && receipt.startsWith('d1_')) {
+      const [id, amount, expires, memberId] = unseal('spikerhak-donation-receipt-v1', receipt.slice(3));
+      if (expires <= now) throw new CheckoutError(410, 'O prazo de consulta deste Pix terminou.');
+      return { id, amount, memberId };
+    }
     if (typeof receipt !== 'string' || !/^[a-zA-Z0-9_-]{1,220}\.[a-zA-Z0-9_-]{43}$/.test(receipt)) {
       throw new CheckoutError(400, 'Comprovante inválido.');
     }
     const [payload, signature] = receipt.split('.');
-    const expected = createHmac('sha256', receiptKey).update(payload).digest('base64url');
+    const expected = createHmac('sha256', legacyReceiptKey).update(payload).digest('base64url');
     if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) throw new CheckoutError(403, 'Comprovante inválido.');
     const [id, amount, expires] = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
     if (expires <= now) throw new CheckoutError(410, 'O prazo de consulta deste Pix terminou.');
@@ -147,17 +185,27 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
       }
       // A timed-out POST can still create a Pix. Never replay it on the same link.
       session.attempted = true;
-      const pix = await gateway('/transactions', amount);
+      const payment = { amount };
+      let claim;
+      if (rewards) {
+        const issuedAt = Date.now();
+        claim = seal('spikerhak-donation-callback-v1', [session.user, amount, issuedAt]);
+        payment.webhook = new URL('/api/doacoes/webhook/' + claim, callbackBase).href;
+      }
+      const pix = await gateway('/transactions', payment);
       if (pix.amount !== amount || typeof pix.id !== 'string' || !PIX_ID.test(pix.id) ||
           typeof pix.qrCodeBase64 !== 'string' || pix.qrCodeBase64.length > 400_000 ||
           !/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(pix.qrCodeBase64) ||
           typeof pix.copyPaste !== 'string' || !/^[\x20-\x7e]{10,1200}$/.test(pix.copyPaste)) {
         throw new CheckoutError(502, 'A Promisse não retornou um QR Code válido.');
       }
+      if (claim) liveClaims.set(claim, { id: pix.id, until: now + RECEIPT_LIFETIME });
       session.pix = {
         amount, qr: pix.qrCodeBase64, copyPaste: pix.copyPaste,
         expiresAt: Number.isFinite(Date.parse(pix.expiresAt)) ? new Date(pix.expiresAt).toISOString() : null,
-        receipt: signReceipt(pix.id, amount, now)
+        receipt: rewards
+          ? 'd1_' + seal('spikerhak-donation-receipt-v1', [pix.id, amount, now + RECEIPT_LIFETIME, session.user])
+          : signReceipt(pix.id, amount, now)
       };
       return session.pix;
     } finally {
@@ -165,22 +213,59 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     }
   }
 
+  async function lookupPix(id, amount) {
+    const transaction = await gateway('/transactions/' + encodeURIComponent(id));
+    if (transaction.id !== id || transaction.amount !== amount || transaction.type !== 'DEPOSIT') {
+      throw new CheckoutError(502, 'Não foi possível confirmar os dados deste Pix.');
+    }
+    const value = String(transaction.status).toLowerCase();
+    const status = value === 'paid' ? 'paid' : ['expired','failed','cancelled','canceled'].includes(value) ? 'expired' : 'pending';
+    return { status, transaction };
+  }
+
   async function checkPix({ receipt }, now) {
-    const { id, amount } = readReceipt(receipt, now);
-    const cached = statusChecks.get(id);
+    const { id, amount, memberId } = readReceipt(receipt, now);
+    const cacheKey = `${id}:${memberId || ''}`;
+    const cached = statusChecks.get(cacheKey);
     if (cached?.until > now) return cached.result;
     takeRateLimit('checks', 60, now);
     const result = (async () => {
-      const transaction = await gateway('/transactions/' + encodeURIComponent(id));
-      if (transaction.id !== id || transaction.amount !== amount || transaction.type !== 'DEPOSIT') {
-        throw new CheckoutError(502, 'Não foi possível confirmar os dados deste Pix.');
+      const { status } = await lookupPix(id, amount);
+      if (status !== 'paid' || !memberId) return { status };
+      try {
+        await grantRole(memberId);
+        return { status, donorRoleGranted: true };
+      } catch (error) {
+        console.error('[Doações] Pix confirmado, cargo pendente:', error.code || error.name);
+        return { status, donorRoleGranted: false };
       }
-      const value = String(transaction.status).toLowerCase();
-      const status = value === 'paid' ? 'paid' : ['expired','failed','cancelled','canceled'].includes(value) ? 'expired' : 'pending';
-      return { status };
     })();
-    statusChecks.set(id, { until: now + 5000, result });
+    statusChecks.set(cacheKey, { until: now + 5000, result });
     return result;
+  }
+
+  async function handleWebhook(req, claim, now) {
+    if (!rewards) throw new CheckoutError(404, 'Página não encontrada.');
+    if (req.method !== 'POST') throw new CheckoutError(405, 'Método não permitido.');
+    const [memberId, amount, issuedAt] = unseal('spikerhak-donation-callback-v1', claim);
+    if (now - issuedAt > CALLBACK_LIFETIME || !MEMBER_ID.test(memberId)) {
+      throw new CheckoutError(410, 'Identificador expirado.');
+    }
+    const body = await readJson(req);
+    if (body.event && body.event !== 'payment.approved') return;
+    const id = body.data?.id || body.id || body.transactionId;
+    if (typeof id !== 'string' || !PIX_ID.test(id)) throw new CheckoutError(400, 'Identificador de Pix inválido.');
+    const boundPayment = liveClaims.get(claim);
+    if (boundPayment && boundPayment.id !== id) throw new CheckoutError(403, 'Pix diferente do solicitado.');
+    // The callback URL is private to this charge. Only the authenticated
+    // Promisse lookup can establish the amount, payment state and creation time.
+    const { status, transaction } = await lookupPix(id, amount);
+    const createdAt = Date.parse(transaction.createdAt);
+    if (!Number.isFinite(createdAt) || createdAt < issuedAt - 30_000 || createdAt > issuedAt + 120_000) {
+      throw new CheckoutError(403, 'Pix fora do período da solicitação.');
+    }
+    if (status === 'pending') throw new CheckoutError(503, 'Pagamento ainda em confirmação.');
+    if (status === 'paid') await grantRole(memberId);
   }
 
   async function handleHttp(req, res) {
@@ -193,6 +278,12 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     }
     if (!pathname.startsWith('/api/doacoes/')) return false;
     try {
+      if (pathname.startsWith('/api/doacoes/webhook/')) {
+        await handleWebhook(req, pathname.slice('/api/doacoes/webhook/'.length), Date.now());
+        res.writeHead(204, securityHeaders);
+        res.end();
+        return true;
+      }
       if (!['/api/doacoes/pix','/api/doacoes/status'].includes(pathname)) throw new CheckoutError(404, 'Página não encontrada.');
       if (!enabled) throw new CheckoutError(503, 'Doações por Pix estão indisponíveis.');
       if (req.headers.origin !== publicUrl.origin) throw new CheckoutError(403, 'Origem da página inválida.');
@@ -250,14 +341,15 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     return true;
   }
 
-  async function publishPanel(channel, botId, announcement) {
+  async function publishPanel(channel, botId) {
     if (!enabled || channel.id !== channelId) return;
     const messages = await channel.messages.fetch({ limit: 50 });
     const previous = messages.find(message => message.author.id === botId &&
       message.embeds.some(embed => embed.title === PANEL_TITLE));
     const embed = new EmbedBuilder().setColor(0x2ECC71).setTitle(PANEL_TITLE).setDescription(
       'Apoie a comunidade SpikerHak com uma doação voluntária via Pix.\n\n' +
-      '**Doação mínima: R$ 2,52.** Clique no botão para abrir um link privado no navegador, escolher o valor e gerar o QR Code pela PromissePay.'
+      '**Doação mínima: R$ 2,52.** Clique no botão para abrir um link privado no navegador, escolher o valor e gerar o QR Code pela PromissePay.' +
+      (rewards ? '\n\nApós a confirmação do Pix, o SpikerBot libera o cargo **💸・Doador** e o acesso ao chat e aos pré-lançamentos na categoria **Doadores**.' : '')
     );
     const button = new ButtonBuilder().setCustomId(DONATE_BUTTON).setLabel('Doar via Pix').setStyle(ButtonStyle.Success);
     const panel = { embeds: [embed], components: [new ActionRowBuilder().addComponents(button)], allowedMentions: { parse: [] } };
@@ -266,8 +358,12 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
         !previous.components.some(row => row.components?.some(component => component.customId === DONATE_BUTTON))) {
       await previous.edit(panel);
     }
-    if (announcement?.startsWith('@everyone ') && announcement.length <= 2000 &&
-        !messages.some(message => message.author.id === botId && message.content === announcement)) {
+  }
+
+  async function announce(channel, botId, announcement) {
+    if (!enabled || !rewards || !announcement?.startsWith('@everyone ') || announcement.length > 2000) return;
+    const messages = await channel.messages.fetch({ limit: 50 });
+    if (!messages.some(message => message.author.id === botId && message.content === announcement)) {
       const nonce = createHash('sha256').update(announcement).digest('hex').slice(0, 24);
       await channel.send({
         content: announcement,
@@ -278,7 +374,7 @@ function createDonationsService({ guildId, channelId, baseUrl, apiKey = configur
     }
   }
 
-  return { handleHttp, handleInteraction, publishPanel };
+  return { handleHttp, handleInteraction, publishPanel, announce };
 }
 
 module.exports = { createDonationsService };

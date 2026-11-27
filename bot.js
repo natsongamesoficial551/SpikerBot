@@ -14,6 +14,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { createGiveawayService, registerGiveawayCommands } = require('./giveaways');
 const { createDonationsService } = require('./donations');
+const { DONOR_ROLE, ensureDonorChannels, grantDonorRole } = require('./donor-access');
 const Tesseract = require('tesseract.js');
 let sharp = null;
 try {
@@ -247,10 +248,14 @@ const PORT = process.env.PORT || 10000;
 const SELF_PING_URL = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
 const SELF_PING_INTERVAL_MS = 7 * 60 * 1000;
 const DONATIONS_CHANNEL_ID = '1574965060281966632'; // 💸・doações
+const ANNOUNCEMENTS_CHANNEL_ID = '1574896835364126791'; // 📢・anúncios-oficiais
 const donations = createDonationsService({
   guildId: GUILD_ID,
   channelId: DONATIONS_CHANNEL_ID,
-  baseUrl: process.env.DONATIONS_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || SELF_PING_URL
+  baseUrl: process.env.DONATIONS_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || SELF_PING_URL,
+  callbackUrl: process.env.RENDER_EXTERNAL_URL || SELF_PING_URL,
+  applicationSecret: TOKEN,
+  grantRole: async memberId => grantDonorRole(await client.guilds.fetch(GUILD_ID), memberId)
 });
 
 const server = http.createServer(async (req, res) => {
@@ -292,7 +297,7 @@ client.once('ready', async () => {
   });
   giveaways.startExpiration(client);
   client.channels.fetch(DONATIONS_CHANNEL_ID).then(channel => {
-    if (channel?.isSendable()) return donations.publishPanel(channel, client.user.id, process.env.DONATIONS_ANNOUNCEMENT);
+    if (channel?.isSendable()) return donations.publishPanel(channel, client.user.id);
   }).catch(error => console.error('[Doações] Não foi possível atualizar o painel:', error.code || error.name));
 
   // Garantir que o painel de tickets está publicado em 🎫・abrir-ticket
@@ -404,16 +409,22 @@ client.once('ready', async () => {
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
     const guildRoles = await guild.roles.fetch();
-    let doadorRole = guildRoles.find(r => r.name === '💸・Doador');
+    let doadorRole = guildRoles.find(r => r.name === DONOR_ROLE);
     if (!doadorRole) {
       doadorRole = await guild.roles.create({
-        name: '💸・Doador',
+        name: DONOR_ROLE,
         color: 0x2ECC71,
         hoist: true,
         mentionable: false,
         reason: 'Cargo oficial de doadores do servidor SpikerHak'
       });
       console.log(`[SpikerBot] Cargo criado: ${doadorRole.name} (${doadorRole.id})`);
+    }
+    const donorChannels = await ensureDonorChannels(guild, doadorRole, staffRoleIds);
+    console.log('[Doações] Categoria Doadores configurada com dois canais:', donorChannels.category.id);
+    if (process.env.DONATIONS_ANNOUNCEMENT) {
+      const announcements = await guild.channels.fetch(ANNOUNCEMENTS_CHANNEL_ID);
+      if (announcements?.isSendable()) await donations.announce(announcements, client.user.id, process.env.DONATIONS_ANNOUNCEMENT);
     }
 
     const readOnlyOverwrites = [
